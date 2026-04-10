@@ -9,7 +9,7 @@ publication.
 
 Read the LICENSE before examining any files.
 
-Also guys, sadly i don't think there will be any updates on this specific project, due to the fact im working on this as 1 person, and dealing with school etc. at the same time, it is very difficult to reverse engineer a full SCADA RTU firmware dump all alone. Sorry. But you can always check out other cool, simpler stuff on my page. 
+Also guys, sadly i don't think there will be any updates on this specific project, due to the fact im working on this as 1 person, and dealing with school etc. at the same time, it is very difficult to reverse engineer a full SCADA RTU firmware dump all alone. I am aware there is a LOT of stuff missing that would be very good and cool, educationally and for research, so for that im really sorry. But you can always check out other cool, simpler stuff on my page. And sadly no one can contribute.
 
 ## What This Is
 
