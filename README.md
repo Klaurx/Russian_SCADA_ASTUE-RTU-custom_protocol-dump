@@ -8,6 +8,7 @@ operationally sensitive identifiers have been fully redacted before
 publication.
 
 Read the LICENSE before examining any files.
+Also guys, sadly i don't think there will be any updates on this specific project, due to the fact im working on this as 1 person, and dealing with school etc. at the same time, it is very difficult to reverse engineer a full SCADA RTU firmware dump all alone. Sorry. But you can always check out other cool, simpler stuff on my page. 
 
 ## What This Is
 
