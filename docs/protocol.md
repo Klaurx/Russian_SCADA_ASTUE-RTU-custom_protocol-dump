@@ -14,7 +14,8 @@ distinct from the core RTOS framing.
 
 The base class kanaldrv provides virtual method slots for all transport
 operations. Concrete subclasses fill those slots: ctcpqnx for TCP, cudpqnx
-for UDP, ctnc for radio, csercom and cgsmlink for serial and GSM paths.
+for UDP, ctnc for radio, csercom and cgsmlink for serial and GSM paths,
+and cp104send for the upstream IEC 60870-5-104 server path.
 
 
 ### Srez Frame Structure
@@ -32,9 +33,10 @@ Offset   Size   Field
 ```
 
 The timestamp bytes encode YY MM DD HH MM SS in BCD. This is confirmed from
-the GPS time conversion function ConvLocToSerKan in the qcet and Aqalpha
-binaries, and from MakeSrezWithFictiveTime which copies 6 bytes directly
-from a TIME_SERVER_KANAL struct into frame offsets 1 through 6.
+the GPS time conversion function ConvLocToSerKan in the qcet, qpty, qptym,
+qmir, qpuso, and Aqalpha binaries, and from MakeSrezWithFictiveTime which
+copies 6 bytes directly from a TIME_SERVER_KANAL struct into frame offsets
+1 through 6.
 
 Frame type discriminator values recovered from MakeSrezBuf():
 
@@ -85,7 +87,7 @@ SOST_PRIEM*, SOST_SEND*, buf1*, buf2*, uint16, RTOS_RETRANSLATE_ADR*, uint16
 The byte-level construction of the kvitok frame has not been fully
 disassembled as of this writing. It is known from context to be a short
 fixed-length frame carrying the sequence number from SOST_SEND[+0x2] and
-the channel address from RTOS_RETRANSLATE_ADR. It is a priority target
+the channel address from RTOS_RETRANSLATE_ADR. It remains a priority target
 for the next disassembly pass.
 
 The function _MakeKvitok is also present in libsystypes.so.1 with the
@@ -189,48 +191,6 @@ SOST_SEND into the object's handshake save area:
 ```
 
 
-### Shared Memory Naming Scheme
-
-All IPC buffers use QNX POSIX shared memory with names formatted as printf
-format strings filled with a four-digit zero-padded unit number:
-
-```
-/Sem%.04u     semaphore object
-/SB%.04u      send buffer
-/BE%.04u      buffer event
-/BP%.04u      buffer packet
-Nreg%.04u.bin register file, persistent on flash
-Per%.04u.bin  period file, persistent on flash
-```
-
-The unit number filling the format slot is the value of the a command-line
-parameter, stored at object offset +0x4 and initialised to 0xffff before
-parsing.
-
-
-### Transport Configuration via start.ini
-
-The Kanal= line format is:
-
-```
-Kanal=ctcpqnx  a<unit_id>  i<localIP>,<localPort>,<remoteIP>,<remotePort>
-```
-
-Parameters:
-
-  a sets the unit address as a uint16, stored at obj+0x4, initialised to 0xffff
-  i sets the IP and port configuration, parsed by ctcpqnx::RaspakKeys()
-    localIP is the address the RTU binds on
-    localPort is the port the RTU listens on or sends from, value 2124
-    remoteIP is the SCADA master address
-    remotePort is the SCADA master port, value 5124
-
-The ctcpqnx class stores the local port at object offset +0x2005c and the
-remote port at +0x2005e, parsed from the i parameter by stepping through
-up to three sub-arguments indexed 0, 1, 2, and 3 via GetItem calls. The
-local IP string is stored at [obj+0x20034] and the remote IP at [obj+0x20048].
-
-
 ---
 
 ## USOTM Field Bus Protocol
@@ -238,11 +198,9 @@ local IP string is stored at [obj+0x20034] and the remote IP at [obj+0x20048].
 ### Physical Layer
 
 Serial port on a QNX /dev/serN device. The default port is /dev/ser7 in the
-active deployment configuration, or /dev/ser9 in the project configuration.
-The global ds:0x804eac0 holds the port path string. The baud rate is read
-from the global Speed at ds:0x804eec4 and applied via cfsetispeed and
-cfsetospeed. The port file descriptor is stored at cusotm object offset
-+0x4e18.
+active deployment configuration (progr/start.ini), or /dev/ser9 in the
+project configuration. The baud rate is 115200 in both configurations. The
+port file descriptor is stored at cusotm object offset +0x4e18.
 
 The termios configuration applied by InitPort() is confirmed from disassembly
 at 0x804c9ae:
@@ -255,11 +213,6 @@ c_lflag &= 0xffff7c04  (raw mode, no echo, no signals)
 c_cc[VMIN] = 0
 c_cc[VTIME] = 0
 ```
-
-Note that an earlier documentation version incorrectly listed a c_oflag mask.
-No c_oflag modification appears in the disassembly; the four fields modified
-are c_iflag (twice, at different offsets in the termios struct), c_cflag,
-and c_lflag.
 
 
 ### WaitOtvet() Receive Loop
@@ -369,11 +322,8 @@ Recovered from type checks in the disassembly of each Raspak function:
 
 Note: an earlier version of this documentation listed 0x86 as the analog
 type byte. This was incorrect. The disassembly of RaspakAnalog at 0x804ad62
-contains the instruction:
-
-  cmp BYTE PTR [edi+0x1], 0x5a
-
-which unambiguously identifies 0x5a as the type byte checked by RaspakAnalog.
+contains the instruction cmp BYTE PTR [edi+0x1], 0x5a which unambiguously
+identifies 0x5a as the type byte checked by RaspakAnalog.
 
 Additionally there are two further analog parsers with distinct type bytes:
 
@@ -391,9 +341,7 @@ index is as follows, confirmed from disassembly of the main loop:
 
 Step 1: SendTuFromQuery() drains any pending discrete output commands from
   the TU queue. The queue is stored starting at object offset +0x4e28 as
-  a sequence of 6-byte records. Each record carries four fields passed to
-  SendTuCommand: a uint8 at +0x4e2c, a uint16 at +0x4e28, a uint8 at
-  +0x4e2d, and a uint16 at +0x4e2a. The queue count is at [obj+0x5080].
+  a sequence of 6-byte records.
 
 Step 2: Check tag[+0x1ae]. If the pending TU flag is non-zero, call SendTu(i)
   which calls SetGroupTu to send an 18-byte group telecontrol frame and then
@@ -425,10 +373,8 @@ Step 10: Check tag[+0x1bb]. If non-zero, call SendZaprosAnalog(i) which
   the old or new analog format succeeded.
 
 Step 11: SendTuFromQuery() again. Additional steps follow in the Working
-  loop for discrete and impulse polling, confirmed by the presence of
-  SendZaprosDiscret and SendZaprosImpuls in the function list, but the
-  exact ordering relative to the steps above requires further analysis of
-  the full Working() function body.
+  loop for discrete and impulse polling via SendZaprosDiscret and
+  SendZaprosImpuls.
 
 Tag pending flag offsets confirmed from Working() disassembly:
 
@@ -439,6 +385,96 @@ tag[+0x1b9]   pending TempNar request flag, byte
 tag[+0x1ba]   pending AddAnalog request flag, byte
 tag[+0x1bb]   pending new-format Analog request flag, byte
 ```
+
+
+### usotmj Journal Extension
+
+The cusotmj class (binary: usotmj, source file: usotmj.cc) extends cusotm
+with a full SOE (sequence of events) journaling layer. The extension replaces
+cyclic polling for telestatus and teleindication with change-driven polling,
+recording events in a time-stamped journal rather than writing directly to
+the shared memory state model.
+
+Key additions in cusotmj not present in cusotm:
+
+```
+AddEventTiInBuffer(int, unsigned char*, unsigned short*, TIME_SERVER*)
+  accumulates teleindication change events into an internal buffer,
+  associating each change with a precise TIME_SERVER timestamp
+
+AddEventTsInBuffer(int, unsigned char, TIME_SERVER*)
+  accumulates telestatus change events into an internal buffer
+
+AddTiEvent(TAG_TI_EVENT*, unsigned char, unsigned char, unsigned short,
+           TIME_SERVER*)
+  creates a TAG_TI_EVENT record from component fields
+
+DeleteEventTs(int)
+  removes a specific telestatus event from the journal
+
+GetAnalogFromJournal(TAG_TI_EVENT*, unsigned char, MSG_RETURN_ANALOG*)
+  retrieves a historical analog value from the journal by event record
+  and channel index
+
+GetDiscretFromJournal(MSG_GET_PARAM*, MSG_RETURN_DISCRET*)
+  retrieves a historical discrete state from the journal by query parameter
+
+IsTsWriteEvent(int, unsigned char)
+  checks whether a telestatus point is configured to write events
+
+MakeZaprosChangeTi(int, int, unsigned char*)
+  builds an outbound request for teleindication changes since a given index
+
+MakeZaprosChangeTs(int, unsigned char*)
+  builds an outbound request for telestatus changes
+
+MakeZaprosTimeKvitok(int, unsigned char*)
+  builds a time-tagged acknowledgment frame confirming event receipt
+
+RaspakChangeTi(int, unsigned char*, unsigned short)
+  parses a teleindication change response, storing events with timestamps
+
+RaspakChangeTs(int, unsigned char*, unsigned short)
+  parses a telestatus change response
+
+RaspakTimeKvitok(int, unsigned char*, unsigned short, TIME_SERVER*)
+  parses the time-tagged acknowledgment from the field device
+
+ReadJournalTi(int)
+  reads the teleindication journal for a given device index
+
+ReadJournalTs(int)
+  reads the telestatus journal for a given device index
+
+TypeUsoJournal
+  a global variable distinguishing journal-capable USO device types from
+  standard types, used to select between cyclic and change-driven polling
+```
+
+The __SS__ global (confirmed from nm at address 0x0804fea8) is a session
+state variable not present in cusotm, used by the journal extension to
+track acknowledgment state across multiple change-driven poll cycles.
+
+SendZaprosDiscret in cusotmj takes an extra int parameter compared to the
+cusotm version. The two binaries are not interchangeable at the call site
+level. The additional parameter controls whether the request is for initial
+synchronisation (full state download) or incremental change reporting.
+
+The usodrv::WaitKanalFree and usodrv::FreePort calls present in usotmj but
+absent from usotm confirm that the journal variant coordinates port access
+across multiple concurrent polling threads, whereas the basic usotm driver
+uses a simpler single-threaded polling model.
+
+cusotmj also calls usodrv::GetParValue for parameter table lookups and
+imports tcdrain (confirmed from the undefined symbol table), which the base
+cusotm does not, confirming that the journal variant performs output drain
+operations to ensure the serial port is fully flushed before waiting for
+responses.
+
+The cusotm binary (basic variant) retains GetFreq and the fl_debug and Pause
+globals, which are absent from cusotmj. GetFreq processes impulse counter
+frequency data via a separate polling path that the journal variant replaces
+with its change-driven mechanism.
 
 
 ### Discrete Frame Parsing via RaspakDiscret
@@ -458,9 +494,8 @@ count = ((buf[3] * 0xab) >> 8) >> 2
 This is integer division by approximately 85 divided by 32, which is a
 scaling factor for the number of 16-bit status words in the frame.
 
-Each status word is assembled big-endian from two consecutive payload bytes
-at positions [4 + i*2] (high byte) and [5 + i*2] (low byte). Values are
-stored into the device tag structure at computed offsets:
+Each status word is assembled big-endian from two consecutive payload bytes.
+Values are stored into the device tag structure at computed offsets:
 
 ```
 tag[+0xbc]              status flags byte, OR'd with 0x02 (data fresh), 0x10, 0x04
@@ -472,13 +507,12 @@ tag[+0xb4 + i*2]        received value word
 
 After all items are processed, AddOK(uso_index) is called to mark the device
 as responding. On success, SendSbrosLatch(i) is called to send a latch
-reset frame back to the device. This post-success latch reset is not
-documented in earlier versions of this repository.
+reset frame back to the device.
 
 
 ### Analog Frame Parsing
 
-Three separate analog parsers exist. Their relationship is:
+Three separate analog parsers exist.
 
 RaspakAnalog at 0x804ad62 is the new-format parser. It checks type byte
 0x5a. It checks the device address at buf[2] against tag[+0x0f]. It then
@@ -499,19 +533,14 @@ requires further disassembly.
 
 RaspakAddAnalog at 0x804b0e6 handles the AddAnalog poll variant used
 for the high-frequency analog update path. Its frame structure is similar
-to RaspakAnalog. Confirmed from the SendZaprosAddAnalog path in Working().
+to RaspakAnalog. The type byte requires further disassembly.
 
 Important correction: an earlier version of this documentation incorrectly
 stated that RaspakAddAnalog triggers the producer/consumer thread
 synchronisation when count exceeds 55 channels. The thread synchronisation
 path using the global mutex mtx at 0x804eec8 and the global condition
 variable cond at 0x804eed0 is actually in RaspakImpuls, not in any analog
-parser. The two globals are named (symbol type D, initialised data):
-
-```
-0x804eec8   mtx    global mutex
-0x804eed0   cond   global condition variable
-```
+parser.
 
 
 ### Impulse Counter Frame Parsing via RaspakImpuls
@@ -520,8 +549,7 @@ Confirmed from disassembly at 0x804b2ae. Type byte must be 0x56. Up to 32
 counters are handled (loop 0 to 31, cmp ebx, 0x20).
 
 The frame carries four bitmask bytes at offsets 4, 5, 6, and 7. The bit
-count in each byte is determined by calling KolBits(buf[4]), KolBits(buf[5]),
-KolBits(buf[6]), and KolBits(buf[7]) separately and summing the results.
+count in each byte is determined by calling KolBits on each byte separately.
 The expected frame length is (total_set_bits * 2) + 0x0a. If the actual
 length does not match, AddError is called and zero is returned.
 
@@ -532,13 +560,9 @@ consumer slot is free, [obj+0x4e24] is written with the uso index and
 pthread_cond_signal is called to wake the consumer thread. The mutex is
 then released.
 
-For each of the 32 bit positions, the bit position is decoded from the
-bitmask using a bit extraction sequence (sar and test). If the bit is set
-and the corresponding position in the change flag at tag[+0xe4] is clear,
-a 16-bit counter value is assembled big-endian from two consecutive bytes
-at the current payload offset (starting at 0x08 and advancing by 2 per
-active counter). The delta computation uses the previous value at
-tag[+0xec + counter*4]:
+For each of the 32 bit positions, if the bit is set and the corresponding
+position in the change flag at tag[+0xe4] is clear, a 16-bit counter value
+is assembled big-endian from two consecutive bytes. The delta computation:
 
 ```
 if new == prev: no change
@@ -549,9 +573,7 @@ if new < prev and prev <= 0x7fff: delta computed via table at
   tag[+0xb0 + counter*2 + 0x0c], stored back into that table field
 ```
 
-The overflow detection threshold is 0x7fff. Counters are treated as unsigned
-16-bit values with rollover detection at the midpoint. Change flags are
-maintained at tag[+0xe4 + byte] and tag[+0xe8 + byte] as bitmasks.
+The overflow detection threshold is 0x7fff.
 
 
 ### Internal Temperature Frame via RaspakTempVn
@@ -561,58 +583,6 @@ length must be exactly 8 bytes (the check is si == 0x8). Temperature value
 is assembled as a signed 16-bit integer from buf[4] (high byte) and buf[5]
 (low byte) and stored at tag[+0x1b4] as int32. A flag byte at tag[+0x1be]
 is set to 1 indicating fresh data.
-
-
-### External Temperature Frame via RaspakTempNar
-
-Confirmed from the symbol table at 0x8049d12. This function parses the
-external (ambient) temperature response from the USO device. Its frame
-structure and type byte require full disassembly. The Working() loop
-triggers SendZaprosTempNar when tag[+0x1b9] is non-zero. The response
-is processed by RaspakTempNar which is called from SendTuFromQuery context.
-
-
-### UKD Command Type
-
-Three functions implement an undocumented command type referred to internally
-as UKD (likely "управляющая команда данных", control data command):
-
-  SendZaprosUkd at 0x804be96 sends a UKD request frame
-  RaspakUkd at 0x804f96 parses the UKD response
-  RaspakKvitUkd at 0x804e99e8 processes the UKD acknowledgment
-
-The SendZaprosUkd path includes KEY_INFO struct processing via GetUkdValue
-and MakeKeyInfo, suggesting UKD relates to keyed or authenticated control
-commands. The frame construction in SendZaprosUkd builds a frame starting
-with 0x5b (confirmed from the immediate 0x5b stored at [ebp-0x10c]) followed
-by 0x36 at [ebp-0x10b]. RaspakKvitUkd is called after WaitOtvet with a
-0x100 iteration timeout. The retry loop runs up to 5 times (cmp ebx, 0x5).
-
-
-### AddKod() Command Encoding
-
-Confirmed from disassembly at 0x804aad8. The function signature is
-AddKod(uso_index, point_number, value).
-
-If point_number is negative (sign bit set at 0x804aae9, js instruction),
-AddKod returns immediately as a no-op sentinel.
-
-Otherwise, the mutex mtx is acquired. If [obj+0x4e20] equals the uso_index
-argument, the thread waits on cond until it changes. Once the slot is free,
-[obj+0x4e24] is written with uso_index and cond is signalled. The mutex is
-released.
-
-The command is then encoded into the device tag structure:
-
-```
-bit_position = point_number mod 8
-byte_position = point_number / 8
-tag[+0x17 + byte_position] |= (1 << bit_position)   command pending bitmask
-tag[+0x1c + point_number*4] = value                  command value word
-```
-
-GetLocalTime is called to timestamp the command at tag[+0x9c] with the
-current system time.
 
 
 ### SetGroupTu() Telecontrol Frame
@@ -637,62 +607,114 @@ Offset   Value             Description
 After sending, WaitOtvet is called with a 500ms timeout (0x1f4 iterations).
 
 
-### SendTuCommand() Frame
+---
 
-Confirmed from disassembly at 0x804c1d2. This builds a 7-byte outbound
-control frame (confirmed by the immediate 0x7 stored at [esp+0x8] before
-calling SendBuffer). This is a separate, shorter command than SetGroupTu.
-The frame encodes activate/deactivate state and an address byte. The address
-arithmetic uses imul eax, eax, 0x147b followed by a shift sequence to derive
-a BCD-like remainder, indicating the address is encoded in a compressed
-decimal form.
+## USOM Field Bus Protocol (cusom)
 
+The cusom class (binaries: usom and usom2) implements a third distinct USO
+field bus class separate from both cusotm and the RTU class polling drivers.
+The source files are usom.cc and usom2.cc respectively. Both use /dev/ser1
+as the default port and share the error string "Error USOM No Mewmory"
+(note the misspelling of Memory, preserved from the original source).
 
-### SendTuFromQuery() Queue Drain
+The cusom class implements TestPriem, IsFirstByte, KolBits, WaitOtvet,
+SendBuffer, AddKod, AddOK, AddError, GetUsomTag, GetSostUso, RaspakDiscret,
+RaspakAnalog, RaspakImpuls, RaspakTemp, ZaprosTs, ZaprosTi, ZaprosImpuls,
+ZaprosTemp, SendTu, SendTuFromQuery, SendSbrosLatch, SendSbrosImpuls,
+SetDout, GetDiscret, GetAnalog, GetImpuls, AddUserDataAnalog,
+AddUserDataImpuls, AddUserDataUso, AddDoutInQuery, and Working.
 
-Confirmed from disassembly at 0x804c290. The function reads the queue count
-from [obj+0x5080]. If the count is greater than zero, it iterates through
-6-byte queue records starting at [obj+0x4e28], calling SendTuCommand for
-each record with parameters extracted as:
+The MakeUsoSpecialBufZaprosUso function in cusom is a three-instruction
+passthrough: it writes the input MSG_SPECIAL_BUF pointer into the output
+pointer-to-pointer argument and returns 1 unconditionally. This means cusom
+accepts special buffer requests without transformation, routing them upstream
+unchanged. The actual buffer construction happens in usodrv::MakeUsoSpecialBuf
+in the base class.
+
+The usom2 binary adds the following methods and globals not present in usom:
 
 ```
-arg1 (uint8):  [record + 0x04], byte at +0x4e2c relative to obj
-arg2 (uint16): [record + 0x00], word at +0x4e28 relative to obj
-arg3 (uint8):  [record + 0x05], byte at +0x4e2d relative to obj
-arg4 (uint16): [record + 0x02], word at +0x4e2a relative to obj
+MakeUsoSpecialBufZaprosUso  present in usom2, absent from usom base
+SendZaprosSerNom(int)
+  sends a serial number query frame to the USO device
+  frame header: byte 0 = 0x5b (start), byte 1 = 0x5f (serial number command)
+  byte 2 = device address from tag[+0x0]
+  byte 3 = 0x00
+  total send length: 4 bytes
+  waits for response via WaitOtvet with timeout 0x100 iterations
+  on success calls AddOK, on failure calls AddError
+
+ZaprosSetTi(int)
+  writes teleindication values back to the field device
+  frame header: byte 0 = 0x5b, byte 1 = 0x6b (SetTi command)
+  iterates up to 8 point slots, building a 0x18-byte payload
+  reads pending TI values from tag[+0x286 + slot] and
+  encodes each value big-endian into the frame at offsets +0x5 and +0x6
+  per slot, with 2-byte stride
+  total send length: 0x15 (21) bytes
+  waits with timeout 0x100 iterations
+
+ZaprosTestTs(int)
+  sends a test telestatus request to the device
+  frame header: byte 0 = 0x5b, byte 1 = 0x63 (TestTs command)
+  byte 4 = 0x01 (test mode flag), byte 5 = 0x01 (active flag)
+  total send length: 5 bytes
+  response is parsed by RaspakTestDiscret
+
+RaspakTestDiscret(int, unsigned char*, unsigned short)
+  validates a test discrete response
+  checks type byte at buf[1] against 0x63 (the TestTs command echo)
+  checks device address at buf[2] against tag[+0x0]
+  checks activation flag at buf[4] against 0x01
+  on pass, reads test result bytes from buf starting at offset 5,
+  storing them into tag[+0x204 + slot] for actual values and
+  tag[+0x20c + slot] for status bytes
+  calls AddOK on success
+
+SetGroupTu(int)
+  group telecontrol output frame
+  frame header: byte 0 = 0x5b, byte 1 = 0x4c (SetGroupTu command)
+  reads device address from tag[+0x0]
+  reads group TU bitmask from tag[+0x27f]
+  reads group TU word from tag[+0x27e]
+  reads additional byte from tag[+0x27d]
+  reads second word from tag[+0x27c]
+
+FL_Test
+  global flag enabling test mode, allows ZaprosTestTs to be called
+  from the Working loop when a test cycle is requested
+
+Pause
+  global inter-poll pause in milliseconds, present in usom2, absent
+  from usom (which uses a hardcoded delay instead)
 ```
 
-After processing all queued commands, [obj+0x5080] is reset to zero.
+The cusom2 AddDoutInQuery signature differs from the cusom version:
+cusom takes (uint8, uint16, uint8, uint16) with 4 parameters while cusom2
+takes (uint16, uint8, uint16, uint8, uint16) with 5 parameters, adding a
+leading uint16 for an extended address or slot specifier.
 
+The SendTuCommand signature also differs: cusom uses
+(uint8, uint16, uint8, uint16) while cusom2 uses
+(uint16, uint8, uint16, uint8, uint16), consistent with the AddDoutInQuery
+extension.
 
-### AddDoutInQuery()
+Both usom and usom2 share the global mutex mtx and condition variable cond
+for producer/consumer synchronization, at the same relative data segment
+positions, confirming shared threading architecture.
 
-Confirmed from symbol table at 0x804c80. The signature is:
-AddDoutInQuery(uint8, uint16, uint8, uint16). This function queues a discrete
-output command into the 6-byte queue structure at [obj+0x4e28] for later
-draining by SendTuFromQuery. It is called from the QMICRO SetOneDout path
-when a discrete output command arrives from the SCADA master.
-
-
-### SendSinhroTime()
-
-Confirmed from symbol table at 0x804bde0. This sends a time synchronisation
-command to the USO field device. The frame format and calling context
-require further disassembly.
-
-
-### SendSbrosLatch()
-
-Confirmed from disassembly at 0x804c444. Called after a successful
-RaspakDiscret to send a latch reset command back to the USO device, clearing
-the latched discrete input state. It calls WaitOtvet after sending.
+The Working loop in cusom2 at 0x804bd38 adds the ZaprosSetTi call at
+0x804bf0d and the ZaprosTestTs call at 0x804bf4f, gated by the FL_Test
+flag and two additional condition checks on per-slot flags at [eax+0x28]
+and [eax+0x1] before invoking the test cycle.
 
 
 ---
 
 ## KPRIS Protocol via the kpris Binary and ckpris Class
 
-### Overview
+See reversing/notes/kpris-commands.md for the complete command string
+analysis. Summary of the protocol structure:
 
 ckpris inherits from usodrv and implements a complete proprietary KPRIS
 substation automation protocol. The source file is kpris.cc. The binary
@@ -702,177 +724,20 @@ signature from cusotm::TestPriem:
   ckpris::TestPriem(unsigned char, unsigned char*, unsigned short&,
                     unsigned char, unsigned char)
 
-This confirms that the KPRIS protocol uses its own frame validation logic
-independent of the USOTM validator.
+This five-parameter signature differs fundamentally from the two-parameter
+cusotm version. KPRIS uses its own frame validation logic independent of the
+USOTM validator.
 
 The transport is either RS-232 serial (default port /dev/ser1) or UDP
 when FL_NoIp is clear and DefaultIp/DefaultPort are configured. The
 FL_NoIp global controls which path is active.
-
-Two separate wait functions exist: WaitOtvet for the normal response path
-and WaitOtvet1 for a secondary wait path, both confirmed from the symbol
-table.
-
-
-### Command Strings
-
-All Zapros format strings are debug logging printed before the corresponding
-outbound frame is transmitted. They directly identify the command type encoded
-in the request frame.
-
-```
-Zapros Ti Kol=%ld
-  Request teleindication point count from device.
-  The %ld value is the number of TI points expected in the response.
-
-Zapros Oscill
-  Request oscillogram capture. A large stack allocation of 0x1430 bytes
-  (5168 bytes) in SendZaprosOscill confirms the oscillogram response buffer.
-
-Zapros spisok files
-  Request directory listing of files stored on the device.
-
-Zapros Read File
-  Request file read by name or index.
-
-Zapros Write File
-  Request file write operation.
-
-Zapros Get Info
-  Request device identification and version information.
-
-Zapros Reboot
-  Request device reboot. This is a privileged command.
-
-Zapros Delete File
-  Request file deletion by name or index.
-
-Zapros Spisok Journals
-  Request listing of available journals (event logs) on the device.
-
-Zapros Journal
-  Request download of a specific journal by index.
-
-Zapros current Config
-  Request the device's running configuration as a data block.
-
-ZaprosSysInfo=%ld
-  Request system information. The numeric argument is logged.
-
-Zapros Ti NomUso=%ld
-  Request teleindication data for a specific USO node number.
-
-Zapros Ts NomUso=%ld
-  Request telestatus data for a specific USO node number.
-```
-
-
-### Control Commands
-
-```
-SetTu1 KolPriem=%ld
-  Send group telecontrol command. KolPriem is the reception count (retries).
-  Implemented via SetGroupTu.
-
-SetOneDout
-  Send single discrete output command. Logs nomuso=%ld.
-
-SetOneTu %ld %ld
-  Send single telecontrol command with two parameters.
-  ckpris::SetOneDout has signature (iocuso*, uint16, uint16, uint16).
-```
-
-
-### Response and Event Strings
-
-```
-Priem KolEvent=%ld
-  Received event buffer. KolEvent is the count of events in the buffer.
-
-Ts Event=%ld
-  Received a telestatus event. Numeric event code logged.
-
-Error crc = %lx
-  CRC mismatch on received frame. The hex value is the received CRC word.
-
-Error func %lx %lx %lx
-  Unexpected function code in received frame. Three hex values logged.
-```
-
-
-### Frame Layout
-
-The KPRIS protocol uses a frame structure that includes an IDENT block,
-a device address byte at tag[+0x39], and a 4-byte identification block
-at tag[+0x4] copied into control frames. A coefficient table accessed via
-GetKoeff and GetKt provides TI/TU measurement scaling.
-
-The group TU frame header (confirmed from SetGroupTu disassembly):
-
-```
-Offset   Value          Field
-0        0x5b           Start byte
-1        0x04           Command type, group telecontrol
-2        tag[+0x39]     Device address
-3        0x00
-4..7     tag[+0x4..7]   4-byte device identification block
-8        0x00
-9        0x00
-10..13   Bitmask: NOT(mask) << 16 | mask
-14       0x01 or 0x00   Activate or deactivate
-total    18 bytes
-```
-
-
-### Priority Command Queuing
-
-ckpris maintains a two-level telecontrol command queue:
-  AddTuInQueneLow for normal-priority commands
-  AddTuInQueneHigh for urgent commands
-
-The oscillogram request pipeline uses SendZaprosOscill and MakeZaprosOscill
-as distinct stages, allowing the oscillogram request to be prepared and
-deferred independently of transmission.
-
-
-### Startup Parameters
-
-```
-Speed       baud rate for the serial port
-Pause       inter-character timeout in milliseconds
-Stopbits    stop bits, 1 or 2
-Parity      parity, N E or O
-Bits        data bits, typically 8
-TypeUso     device type code discriminator
-DefaultIp   fallback IP address for the UDP transport variant
-DefaultPort fallback port for the UDP transport variant
-Port        serial port device path
-```
-
-
-### Global State
-
-```
-FL_NoRazdel          disable separator logic in frame parsing
-FL_UsePriborKtiKtu   use device-specific KTI and KTU scaling coefficients
-FL_NoIp              disable IP transport, use serial-only mode
-fl_debug             enable verbose debug logging
-KolTsEvent           count of telestatus events processed
-KolTsEvent1          secondary telestatus event counter
-MAX_TEST_POVTOR      maximum retry count before marking device offline
-MAX_TEST_VALUE       maximum test value threshold
-MAX_ERRORS           error threshold before marking USO device as offline
-mnoj                 multiplier constant for scaling
-```
 
 
 ---
 
 ## IEC 60870-5-101 Link Layer via the ekra Binary and cekra Class
 
-### Confirmed Frame Fields
-
-Recovered from debug format strings in the ekra binary:
+Confirmed frame fields recovered from debug format strings in the ekra binary.
 
 Master frame with direction bit 1 and primary message bit 1:
 
@@ -907,18 +772,100 @@ TFN(n)         time tag if present
 NINF(n)        number of information objects
 ```
 
-The single-byte ACK value 0xe5 is confirmed. This is the standard FT1.2
-single character acknowledgment.
+The single-byte ACK value 0xe5 is confirmed. IEC 101 events are routed
+via POSIX message queues with names in the format /ekrauso%d, one queue per
+USO device index. Queue operations include iecTimeSync, iecClass1Poll,
+iecClass2Poll, and iecGlobInterr.
 
 
-### Message Queue Names
+---
 
-IEC 101 events are routed via POSIX message queues with names in the format:
+## IEC 60870-5-104 Server via cp104send
 
-  /ekrauso%d
+The cp104send class subclasses kanaldrv and implements the upstream IEC
+60870-5-104 TCP server. The source file is p104send.cc. All ASDU construction
+is implemented inline with dedicated methods per data type.
 
-One queue is created per USO device index. Queue operations include
-iecTimeSync, iecClass1Poll, iecClass2Poll, and iecGlobInterr.
+The complete method list confirmed from nm:
+
+```
+cp104send::AddAdrASDU               build the common ASDU address field
+cp104send::AddAnalogValue           encode a floating-point analog ASDU
+cp104send::AddCauseOfTransmission   encode the COT byte
+cp104send::AddDiscretValue          encode a single discrete point
+cp104send::AddEventAnalog(EXT_SERVER_EVENT_ANALOG*)
+  encode an event-driven analog ASDU with timestamp
+cp104send::AddEventAnalog(EXT_SERVER_EVENT_CONST*)
+  encode an event-driven constant analog ASDU
+cp104send::AddEventDiscret(EXT_SERVER_EVENT_CONTR*)
+  encode a control direction event ASDU
+cp104send::AddEventDiscret(EXT_SERVER_EVENT_DISCRET*)
+  encode a monitoring direction event ASDU
+cp104send::AddItem                  add a generic ASDU item to the buffer
+cp104send::AddItemSrezAsdu          add srez data as a sequence of ASDUs
+cp104send::AddObjectAdr             encode the information object address
+cp104send::AddSrezAnalog            add analog data from a srez snapshot
+cp104send::AddSrezConst             add constant (engineering coefficient) data
+cp104send::AddSrezDiscret           add discrete data from a srez snapshot
+cp104send::AddSrezInQuene           queue a srez snapshot for transmission
+cp104send::AddTime                  encode a CP56Time2a timestamp
+cp104send::AddTypeIdentificationEvent
+  encode the type ID byte for event-driven ASDUs
+cp104send::AddTypeIdentificationSrez
+  encode the type ID byte for srez-derived ASDUs
+cp104send::AnalizPriem              analyse a received I-frame for commands
+cp104send::ClearBufEvent            clear the event buffer
+cp104send::ContinuePriem            continue receiving after partial frame
+cp104send::ConvertToSystemTime56    convert CP56Time2a bytes to SYSTEMTIME
+cp104send::CreateSrezForRemoteKp    convert RTOS srez data into IEC 104 ASDUs
+cp104send::GetAdrASDU               extract the ASDU address from a frame
+cp104send::GetAdrParameter          extract an address parameter
+cp104send::GetCauseTransm           extract the COT field
+cp104send::GetMinMaxValue           extract float min/max from a value block
+cp104send::GetStaticTimeSend        base class stub returning 0.0
+cp104send::InitKanal                initialise the IEC 104 connection
+cp104send::_InitKanal               internal init helper
+cp104send::IsTimeKorrectEnable      check GPS time correction availability
+cp104send::MakeEventBuf             assemble the event buffer for transmission
+cp104send::MakeSrezBufForAsdu       build a srez buffer formatted for ASDU output
+cp104send::Obmen                    main session loop
+cp104send::RaspakASDU               parse an incoming ASDU
+cp104send::RaspakIframe             parse a received I-frame
+cp104send::RaspakSframe             parse a received S-frame (supervisory)
+cp104send::RaspakUframe             parse a received U-frame (unnumbered)
+cp104send::ReadAnyData              read any pending data from the socket
+cp104send::ReadBufFromKanal         read a buffer from the channel
+cp104send::ReadByteFromKanal        read one byte from the TCP socket
+cp104send::Recv                     socket recv wrapper
+cp104send::Send                     socket send wrapper
+cp104send::SendAnalogValue          transmit a single analog ASDU
+cp104send::SendBufToKanal           transmit a buffer to the IEC 104 master
+cp104send::SendConfirmData          send a data confirmation frame
+cp104send::SendConfirmTimeCorrect   send a time synchronisation confirmation
+cp104send::SendNextBuf              transmit the next queued buffer
+cp104send::SendStartEndSch          send start/end of general interrogation
+cp104send::SendStartEndSrez         send start/end of srez transmission
+cp104send::SendStartEndValue        send start/end of a value transmission
+cp104send::SendTuCommand            send a telecontrol command response
+cp104send::SetNewLocalTime          update the local clock from a received sync
+cp104send::TimeCorrectGo            apply a GPS-derived time correction
+cp104send::TimeReInitKanal          re-initialise the TCP connection
+cp104send::UpdateSendNom            update the send sequence number
+cp104send::WorkProc                 main working thread entry point
+```
+
+The cp104send binary links against libkanaldrv.so.1 and libservdrv.so.1 only.
+It does not link against libusodrv.so.1, confirming it operates on the channel
+side of the firmware hierarchy rather than the field bus side.
+
+TimeCorrectGo(SOST_TIME_CORRECT*, unsigned short, long) is a standalone
+function (not a class method) that applies GPS-derived time correction to the
+IEC 104 time base, converting between the RTOS internal time representation
+and the CP56Time2a format required by the protocol.
+
+The ctcp global at 0x0804fa00 is the singleton cp104send instance used by
+WorkProc. The WorkProc thread at 0x080497a6 is the entry point spawned by
+StartDrv.
 
 
 ---
@@ -931,7 +878,23 @@ which are the static high-byte and low-byte tables for Modbus CRC16.
 The CRC update function is exported as CRC_Update(uint8_t*, uint16_t),
 confirming standard Modbus CRC16 using the 0xa001 polynomial (the reflected
 variant of 0x8005). The same tables and function name appear in the cmdbf
-binary for the STEM-300 and CMDBF meter drivers.
+binary for the STEM-300 and CMDBF meter drivers. The CheckCRC method in
+cmdbf wraps CRC_Update for frame validation.
+
+
+---
+
+## altclass Protocol (qalfat)
+
+The altclass protocol driver (binary: qalfat, source file: qalfat.cc,
+version: 1.8) implements a proprietary serial protocol with built-in DES
+encryption. The class name is altclass. It subclasses usodrv directly.
+
+Full documentation of the crypto primitives, session state machine, FCRC18
+algorithm, USA struct layout, ftek18 scaling, and fopimpt thread is in
+reversing/notes/altclass.md. The type definitions are in
+src/structs/altclass_types.h and the crypto reconstructions are in
+src/protocol/altclass_crypto.h and src/protocol/altclass_crypto.c.
 
 
 ---
@@ -958,9 +921,172 @@ buffering and retranslation protocol that aggregates srez snapshots before
 forwarding them upstream. Partially characterised; full framing details
 require further disassembly.
 
-The cserpr class also implements a two-level telecontrol queue:
-AddTuInQueneLow and AddTuInQueneHigh, mirroring the pattern in ckpris.
-The binary includes functions for value updates across multiple data types:
-UpdateTiValue (with four overloaded variants covering const, event const,
-srez analog, and event analog formats) and UpdateTsValue (with two overloads
-for srez discrete and event discrete formats).
+
+---
+
+## ICP-CON Protocol via cicpcon
+
+The cicpcon class (binary: icpcon, source file: icpcon.cc) implements the
+ICP-CON protocol for ICP-CON field devices on RS-485. It subclasses usodrv
+and maintains its own threading infrastructure with two separate mutex
+globals: mtx for data polling synchronization and mtxtu for telecontrol
+command synchronization, providing finer-grained locking than the single-mutex
+pattern used in cusotm.
+
+The ASCII encoding functions AsciiToByte and ByteToAscii confirm that the
+ICP-CON protocol uses ASCII-encoded hex for certain frame fields, which is
+characteristic of the ICP-CON protocol family.
+
+The GetAdr and SetAdr functions with their compound parameter sets suggest
+a multi-component address format not used by any other field bus driver in
+this firmware set. SetAdr takes an int device index, an unsigned char pointer
+(the address buffer), and an unsigned char (a single-byte component), allowing
+the driver to build addresses from multiple components before transmission.
+
+The FindDoutInQuery function allows the driver to check whether a specific
+discrete output command is already queued before adding a duplicate, a
+deduplication feature not present in the simpler USOTM driver.
+
+
+---
+
+## RPN Protocol via crpn
+
+The crpn class (binary: rpn, source file: rpn.cc) implements the RPN
+protocol for a specialised class of relay protection RTU devices. It
+subclasses usodrv directly and uses /dev/ser1 as its default port.
+
+The Stup-suffixed methods reveal the protocol's domain: stepped relay
+positions with distinct upper bounds, lower bounds, and current step
+values are read via separate queries:
+
+```
+ReadMaxKolStup(int)      read the maximum number of relay steps
+ReadNijnGranStup(int)    read the lower bound for the current step
+ReadNomTekStup(int)      read the current step number
+ReadSostRele(int)        read the relay contact state
+ReadStatus(int)          read the device status word
+ReadVerhGranStup(int)    read the upper bound for the current step
+ReadByte(int, unsigned short, unsigned char, unsigned char*, unsigned short)
+  read a single byte value with explicit timeout and retry parameters
+```
+
+The AddByte and AddWord helpers build outbound frames byte by byte and word
+by word. The PrepareByte and PrepareChar functions handle byte-level encoding,
+and ReadByteFromBuf and GetByteFromBuf / GetWordFromBuf handle decoding.
+The presence of both GetByteFromBuf and GetWordFromBuf as distinct functions
+confirms the protocol carries both byte-width and word-width data fields.
+
+The crpn class uses its own mutex mtx and condition variable cond for
+producer/consumer synchronization, consistent with the pattern used in
+cusotm but applied to the RPN polling cycle.
+
+
+---
+
+## cmdbf Meter Protocol Variants
+
+The cmdbf class appears in three distinct variants across the firmware, each
+with a different method set and targeting different device families.
+
+The stem300 variant (binary: stem300, source file: stem300.cc) implements
+the base cmdbf class for STEM-300 and CMDBF energy meters. It provides
+cyclic polling for current parameters, daily profiles, monthly profiles, and
+time-averaged profiles:
+
+```
+MakeZaprosCurrentPar     request current measurement parameters
+MakeZaprosDay            request daily energy profile
+MakeZaprosMonth          request monthly energy profile
+MakeZaprosProfil         request averaged profile data
+RaspakCurrentPar         parse current parameter response
+RaspakDay                parse daily profile response
+RaspakMonth              parse monthly profile response
+RaspakProfil             parse averaged profile response
+```
+
+The CheckCRC method wraps the Modbus CRC table lookup from the auchCRCHi and
+auchCRCLo tables. The FL_NoRazdel global controls separator parsing. PrepareDWord
+and PrepareWord are byte-order conversion helpers. TestTime validates SYSTEMTIME
+structs received from the meter.
+
+The mdbf80 variant (binary: mdbf80, source file: mdbf80.cc) is the enhanced
+version targeting more advanced Modbus meter devices. It adds floating point
+and 32-bit integer analog variants, telestatus function code support, and
+extended value write paths:
+
+```
+FindAnalogF              find and decode a float32 analog value
+FindAnalogI32            find and decode a signed 32-bit integer analog value
+FindAnalogU32            find and decode an unsigned 32-bit integer analog value
+FindAnalog               find and decode an analog value (dispatches to above)
+MakeZaprosReadTsFunc     request telestatus via function code
+RaspakDiscretTsFunc      parse a function-code telestatus response
+ZaprosTsFunc(int, unsigned char)
+  request telestatus for a specific function code variant
+SendZaprosSetValue106    write a value using Modbus function code 0x10 (6-byte)
+SendZaprosSetValue116    write a value using Modbus function code 0x11 (6-byte)
+MakeTuInQuene            queue a telecontrol write operation
+```
+
+The mdbf80 binary links against libm.so.2 for floating point math, which the
+stem300 and mdbfo variants do not.
+
+The mdbfo variant (binary: mdbfo, source file: mdbfo.cc) is a stripped-down
+open Modbus variant lacking the FindAnalog family, the log file infrastructure,
+and the extended write paths of mdbf80. It is suitable for simpler Modbus
+devices that only require basic read polling.
+
+All three variants share the MakeUsoSpecialBuf and MakeUsoSpecialBufZaprosUso
+methods for routing special buffer requests, and the MakeReadZapros and
+MakeWriteZapros methods for constructing read and write requests from
+MDB_COMMAND structs. The MDB_COMMAND struct encodes the Modbus function code,
+register address, and data length as a compact command descriptor passed
+between the qmicro command layer and the cmdbf polling thread.
+
+
+---
+
+## RTU Class Polling Driver Family
+
+The RTU class polling drivers (qcet, qmir, qpuso, qpty, qptym, qalfat) all
+share a common architectural pattern derived from a common ancestor:
+
+  GetUsomUSA(iocuso*) resolves the device handle by dereferencing iocuso+0x20
+  KorAdr() synchronizes address and timing before each poll cycle
+  fener() computes energy measurements with device-specific parameters
+  fsq(TIME_SERVER_KANAL) handles timestamp sequencing
+  NEXT_PRIBOR() advances to the next device in the polling sequence
+  setimptimer() initializes impulse counter timing
+  newtimer() sets up the poll cycle timer
+  opros() or fopimp() / fopimpt() is the main polling loop thread
+
+The USA struct at iocuso+0x20 is the central device state block for all
+drivers in this family. Its layout is documented in src/structs/altclass_types.h.
+
+Each driver uses a separate FCRC variant for frame integrity:
+
+```
+qalfat (altclass)    FCRC18, using CRC-16/KERMIT with NOT/swap construction
+qpuso (pusclass)     FCRCM (variant not yet fully characterised)
+qmir (mirclass)      FCRC16 (confirmed from symbol table)
+qcet (ctclass)       FCRC (base variant, confirmed from Aqalpha symbols)
+qpty (pclass)        FCRC (base variant)
+qptym (ptmclass)     FCRC16 and RC16 (two CRC functions present)
+```
+
+The RC16(unsigned short, unsigned short) function present in qptym and qpuso
+takes two 16-bit values rather than a buffer pointer, suggesting it operates
+on pre-assembled 16-bit data words rather than byte streams.
+
+Persistent state files:
+
+```
+/ALP.SAV    qmir session state
+/PTY.SAV    qpty and qpuso session state
+```
+
+The FL_INIT global present in all RTU class drivers gates the initialisation
+sequence, preventing poll cycles from starting before the device has
+completed its startup handshake. FL_R and FL_READ control read enable. FL_OP
+controls the operational mode. FL_OTL indicates out-of-limit conditions.
