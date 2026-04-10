@@ -1,66 +1,190 @@
 # Annotated USOTM Field Bus Frame Examples
 #
-# Synthetic frames for parser testing. Format recovered from TestPriem,
-# RaspakDiscret, RaspakImpuls, RaspakTempVn disassembly.
-# No real captured traffic is present.
+# Synthetic frames constructed from the wire format recovered via disassembly
+# of TestPriem, RaspakDiscret, RaspakImpuls, RaspakTempVn, RaspakTempNar,
+# RaspakAnalog, and RaspakOldAnalog in the usotm binary (cusotm class).
+#
+# No real captured traffic is present in this repository.
+#
+# Frame structure: total_length = N + 6
+#   byte 0:      start byte, expected to be 0x5b based on all outbound frame
+#                construction observed (pending direct disassembly of IsFirstByte)
+#   byte 1:      response type byte identifying which Raspak function processes this
+#   byte 2:      device address, compared against tag[+0x0f] in every parser
+#   byte 3:      payload item count N (meaning varies by type)
+#   bytes 4..N+3: payload (encoding depends on type byte)
+#   byte len-2:  CRC high byte
+#   byte len-1:  CRC low byte
+#
+# CRC covers bytes 1 through len-3 inclusive (excludes the start byte
+# and the two CRC bytes themselves). The accumulation function is a virtual
+# method at cusotm vtable offset 0x11c. Two candidate algorithms are
+# implemented in src/protocol/crc16-reconstructed.c.
+#
+# XX is used below to represent the start byte whose exact value is pending
+# disassembly confirmation of IsFirstByte(). The value 0x5b is strongly
+# expected based on all outbound frame headers observed.
 
-# Example 1: Discrete poll response (type 0x57)
+
+# Example 1: Discrete poll response (type byte 0x57)
 #
-#   00: XX   start byte (value unknown pending IsFirstByte disassembly)
-#   01: 57   type: discrete response
-#   02: 01   device address (must match tag[+0x0F])
-#   03: 02   item count N=2  ->  total length = 2 + 6 = 8
-#   04: FF   status word 0, high byte
-#   05: 0F   status word 0, low byte
-#   06: CRC high byte
-#   07: CRC low byte
+# RaspakDiscret at 0x804a38c processes this type.
+# The item count N at byte 3 drives the word count formula:
+#   word_count = (N * 0xab) >> 8 >> 2
 #
-# N=2, derived word count = (2 * 0xAB) >> 8 >> 2 = 0 words
-# (small N produces 0 due to the integer scaling)
-# Use N=0x40 to get word_count=4: (0x40 * 0xAB)=0x2AC0, >>8=0x2A=42, >>2=10 words
+# With N=0x40 (64): (64 * 171 = 10944, >> 8 = 42, >> 2 = 10) gives 10 words.
+# With N=0x04 (4):  (4 * 171 = 684, >> 8 = 2, >> 2 = 0) gives 0 words.
+# With N=0x10 (16): (16 * 171 = 2736, >> 8 = 10, >> 2 = 2) gives 2 words.
 #
-# Synthetic 6-byte minimal discrete frame (N=0):
+# Each word is assembled big-endian: high byte at buf[4 + i*2],
+# low byte at buf[5 + i*2].
+#
+# Status flags written by RaspakDiscret:
+#   tag[+0xbc] OR'd with 0x02 (fresh), 0x10, and 0x04
+#   tag[+0x04 + i*2] current value word
+#   tag[+0x0c + i*2] mask word
+#   tag[+0xc8 + i*2] previous value word
+#   tag[+0xb4 + i*2] received value word
+#
+# After successful parse, SendSbrosLatch(uso_index) is called to send a
+# latch reset frame back to the device.
+#
+# Minimal frame with N=0 (no payload words, total length = 6):
 XX 57 01 00 <CRC_HI> <CRC_LO>
+#
+# Frame with N=0x10 giving 2 status words (total length = 0x10 + 6 = 22):
+# XX 57 01 10 FF 0F AA BB 00 00 00 00 00 00 00 00 00 00 00 00 <CRC_HI> <CRC_LO>
 
-# Example 2: Impulse counter response (type 0x56)
+
+# Example 2: Impulse counter response (type byte 0x56)
 #
-#   00: XX   start byte
-#   01: 56   type: impulse counter
-#   02: 01   device address
-#   03: N    item count (determines total length)
-#   04..07: 4-byte bitmask (which of 32 counters are present)
-#   08+: 16-bit counter values, one per set bit, big-endian
-#   ...: CRC high, CRC low
+# RaspakImpuls at 0x804b2ae processes this type.
+# The thread synchronisation path using mtx at 0x804eec8 and cond at 0x804eed0
+# is in this function, not in the analog parser.
 #
-# Example with bitmask 0x00000003 (counters 0 and 1 present):
-# total payload = 4 (bitmask) + 2 + 2 (two counter values) = 8 bytes
-# N = total payload bytes (verify: N + 6 = total frame length)
+# Byte 3 (N) is the raw payload byte count (N items of data bytes total).
+# Total frame length = N + 6.
 #
+# Bytes 4 through 7: a 4-byte bitmask covering 32 counter positions (bits 0-31).
+# Starting at byte 8: 16-bit counter values in big-endian order, one for each
+# set bit in the bitmask, advancing by 2 bytes per active counter.
+#
+# The active counter count is derived by calling KolBits on each of the 4 bitmask
+# bytes separately and summing the four results. Expected frame length:
+#   (total_active_counters * 2) + 10  (10 = 4 header + 4 bitmask + 2 CRC)
+#
+# Counter delta computation in RaspakImpuls:
+#   if new > prev:  delta = new minus prev
+#   if new < prev and prev > 0x7fff: delta = bitwise NOT(prev) + 1 + new (rollover)
+#   if new < prev and prev <= 0x7fff: delta via lookup table at tag[+0xb0+counter*2+0xc]
+#   if new == prev: no change
+#
+# Overflow detection threshold is 0x7fff (midpoint of unsigned 16-bit range).
+# Change flags at tag[+0xe4 + byte] and tag[+0xe8 + byte] as bitmasks.
+# Accumulator at tag[+0x16c + counter*2].
+#
+# Example with bitmask 0x00000003 (counters 0 and 1 active, N = 4+4 = 8):
+# total frame length = 8 + 6 = 14
 XX 56 01 08 03 00 00 00 00 05 00 0A <CRC_HI> <CRC_LO>
+# byte 3: N=8 (4 bitmask bytes + 4 data bytes = 8 payload bytes)
+# bytes 4-7: bitmask 0x00000003 (counters 0 and 1)
+# bytes 8-9: counter 0 value = 0x0005
+# bytes 10-11: counter 1 value = 0x000a
+# bytes 12-13: CRC
 
-# Example 3: Internal temperature response (type 0x5D)
+
+# Example 3: Internal temperature response (type byte 0x5d)
 #
-#   00: XX   start byte
-#   01: 5D   type: temperature
-#   02: 01   device address
-#   03: 02   item count N=2  ->  total length = 2 + 6 = 8
-#   04: 00   temperature high byte
-#   05: 19   temperature low byte  (0x0019 = 25 degrees C signed)
-#   06: CRC high
-#   07: CRC low
+# RaspakTempVn at 0x8049e54 processes this type.
+# Frame length MUST be exactly 8 bytes (verified by si == 0x8 check).
+# This means N at byte 3 must be 2, giving: 2 + 6 = 8.
 #
-# Note: RaspakTempVn checks si==0x8 (len must equal exactly 8)
+# Temperature is a signed 16-bit integer assembled from:
+#   buf[4]: high byte
+#   buf[5]: low byte
+# Stored at tag[+0x1b4] as int32.
+# Fresh data flag at tag[+0x1be] is set to 1.
 #
+# Example: temperature 0x0019 = 25 degrees Celsius signed:
 XX 5D 01 02 00 19 <CRC_HI> <CRC_LO>
+#
+# Negative temperature example: 0xffe7 = minus 25 degrees Celsius:
+# XX 5D 01 02 FF E7 <CRC_HI> <CRC_LO>
 
-# Example 4: Analog response (type 0x86)
+
+# Example 4: External temperature response (type byte unconfirmed)
 #
-#   00: XX   start byte
-#   01: 86   type: analog
-#   02: 01   device address
-#   03: N    analog item count (max 0x37 = 55)
-#   04+: N bytes of analog payload (format internal to tag structure)
-#   ...: CRC high, CRC low
+# RaspakTempNar at 0x8049d12 processes external temperature from the
+# USO device. The type byte for this response requires further disassembly.
+# The Working() loop triggers SendZaprosTempNar when tag[+0x1b9] is non-zero.
+# Frame format is presumed similar to RaspakTempVn but handling external
+# (ambient) temperature rather than the internal board temperature.
+
+
+# Example 5: New-format analog response (type byte 0x5a)
 #
-# Example with N=4 (total length = 4 + 6 = 10):
-XX 86 01 04 AA BB CC DD <CRC_HI> <CRC_LO>
+# RaspakAnalog at 0x804ad62 processes this type.
+# CORRECTION: Earlier documentation listed 0x86 as the analog type byte.
+# The confirmed type byte from disassembly is 0x5a.
+#
+# Bytes 4 through 7: a 4-byte bitmask covering 32 channel positions.
+# The active channel count is the sum of KolBits called on each of the
+# 4 bitmask bytes separately.
+# Expected frame length: (total_active_channels * 2) + 0x0a
+#
+# Starting at byte 8: 16-bit channel values in big-endian order, one per
+# set bit in the bitmask.
+#
+# For each active channel, AddKod(uso_index, channel_position, value) is called
+# to write the value into the device tag structure.
+#
+# Example with 4 active channels in byte 0 of the bitmask (bits 0,1,2,3 set):
+# bitmask = 0x0000000f, total_active = 4, expected_len = (4*2) + 10 = 18
+# XX 5A 01 08 0F 00 00 00 01 F4 03 E8 05 DC 07 D0 <CRC_HI> <CRC_LO>
+# byte 3: N=8 (4 bitmask + 8 data = 8 payload bytes in this interpretation)
+#   Note: N is the raw payload byte count, total = N+6 = 14 in the TestPriem check
+#   The KolBits calculation independently validates the length
+
+
+# Example 6: Old-format analog response (type byte pending disassembly)
+#
+# RaspakOldAnalog at 0x804ac0e handles the legacy analog format.
+# Loop bound is 8 channels (confirmed: cmp ebx, 0x8).
+# Also calls AddKod for each active channel.
+# The fallback path in SendZaprosAnalog tries RaspakOldAnalog only after
+# RaspakAnalog (type 0x5a) fails. The flag at tag[+0x477] tracks success:
+#   1 means old-format succeeded
+#   0 means old-format failed
+
+
+# Example 7: Discrete output (telecontrol) command frame (outbound)
+#
+# SetGroupTu builds this 18-byte frame and sends it to the USO device.
+# This is an outbound frame from the RTU to the field device.
+#
+# Byte 0:     0x5b  start byte (same start byte used in all outbound frames)
+# Byte 1:     0x04  command type, group telecontrol
+# Byte 2:     device address from tag[+0x39]
+# Byte 3:     0x00
+# Bytes 4-7:  4-byte device identification block from tag[+0x4]
+# Bytes 8-9:  0x00 0x00
+# Bytes 10-13: bitmask encoding: NOT(mask) left-shifted 16 bits OR mask
+# Byte 14:    0x01 for activate, 0x00 for deactivate
+# Bytes 15-17: padding to reach 18 total bytes
+#
+# Example activate frame (device 0x01, single point at bit 0):
+5B 04 01 00 DE AD BE EF 00 00 FF FE 00 01 01 00 00 00
+
+
+# Example 8: Individual TU command frame (outbound, from SendTuCommand)
+#
+# SendTuCommand builds a 7-byte frame (confirmed: 0x7 stored at [esp+0x8]).
+# This is shorter than the SetGroupTu frame and handles single-point commands.
+#
+# Byte 0: 0x5b  start byte
+# Byte 1: encoded address and activate/deactivate flag
+# Bytes 2-6: command-specific encoding
+#
+# Frame length 7 bytes confirmed from the call:
+#   c7 44 24 08 07 00 00 00  mov DWORD PTR [esp+0x8], 0x7
+# followed by lea ebx, [ebp-0x108] and call SendBuffer.
