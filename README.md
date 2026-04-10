@@ -64,50 +64,6 @@ Response type bytes recovered:
 | stem300 / cmdbf  | STEM-300 / cmdbf   | RS-232         | Meter family                    |
 | p104send         | IEC 60870-5-104    | TCP            | Upstream IEC 104 server         |
 
-## Repository Structure
-
-```
-rtos-scada-protocol/
-  README.md
-  LICENSE
-  docs/
-    protocol.md              Wire format, CRC, escaping, command opcodes
-    architecture.md          Full system and software stack description
-    reversing-notes.md       Session notes, open questions, methodology
-  reversing/
-    notes/
-      obmen.md               Annotated Obmen() exchange loop walkthrough
-      makesrezbuf.md         MakeSrezBuf() frame construction analysis
-      testpriem.md           USOTM TestPriem() CRC and validation logic
-      raspakdiscret.md       RaspakDiscret() discrete parse walkthrough
-      kpris-commands.md      KPRIS command set recovered from strings
-      ekra-iec101.md         IEC 60870-5-101 link layer recovered from ekra
-      initkandrv.md          Handshake state machine analysis
-  src/
-    protocol/
-      kvitok.h               ACK frame structure and builder interface
-      srez.h                 Snapshot frame structure definitions
-      usotm_frame.h          USOTM field bus frame layout
-      crc16.c                Reconstructed CRC algorithm (USOTM variant)
-      crc16.h
-    structs/
-      kanaldrv_layout.h      Full kanaldrv object field map with offsets
-      usodrv_api.h           usodrv and cusotm class API reconstruction
-      ioc_types.h            I/O channel type hierarchy
-      msg_types.h            Message and configuration struct definitions
-      rtos_types.h           RTOS_RETRANSLATE_ADR, SOST_*, TIME_SERVER
-    utils/
-      hexdump.c              Simple hex pretty-printer for packet review
-      hexdump.h
-  tools/
-    parser.py                Decode and display RTOS srez frames
-    usotm_parser.py          Decode USOTM field bus frames
-  samples/
-    packets/                 Annotated example frame byte sequences
-    captures/                Placeholder for future capture data
-  tests/
-    test_crc.py              Verify CRC reconstruction against known frames
-```
 
 ## Status
 
