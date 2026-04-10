@@ -1,0 +1,66 @@
+# Annotated USOTM Field Bus Frame Examples
+#
+# Synthetic frames for parser testing. Format recovered from TestPriem,
+# RaspakDiscret, RaspakImpuls, RaspakTempVn disassembly.
+# No real captured traffic is present.
+
+# Example 1: Discrete poll response (type 0x57)
+#
+#   00: XX   start byte (value unknown pending IsFirstByte disassembly)
+#   01: 57   type: discrete response
+#   02: 01   device address (must match tag[+0x0F])
+#   03: 02   item count N=2  ->  total length = 2 + 6 = 8
+#   04: FF   status word 0, high byte
+#   05: 0F   status word 0, low byte
+#   06: CRC high byte
+#   07: CRC low byte
+#
+# N=2, derived word count = (2 * 0xAB) >> 8 >> 2 = 0 words
+# (small N produces 0 due to the integer scaling)
+# Use N=0x40 to get word_count=4: (0x40 * 0xAB)=0x2AC0, >>8=0x2A=42, >>2=10 words
+#
+# Synthetic 6-byte minimal discrete frame (N=0):
+XX 57 01 00 <CRC_HI> <CRC_LO>
+
+# Example 2: Impulse counter response (type 0x56)
+#
+#   00: XX   start byte
+#   01: 56   type: impulse counter
+#   02: 01   device address
+#   03: N    item count (determines total length)
+#   04..07: 4-byte bitmask (which of 32 counters are present)
+#   08+: 16-bit counter values, one per set bit, big-endian
+#   ...: CRC high, CRC low
+#
+# Example with bitmask 0x00000003 (counters 0 and 1 present):
+# total payload = 4 (bitmask) + 2 + 2 (two counter values) = 8 bytes
+# N = total payload bytes (verify: N + 6 = total frame length)
+#
+XX 56 01 08 03 00 00 00 00 05 00 0A <CRC_HI> <CRC_LO>
+
+# Example 3: Internal temperature response (type 0x5D)
+#
+#   00: XX   start byte
+#   01: 5D   type: temperature
+#   02: 01   device address
+#   03: 02   item count N=2  ->  total length = 2 + 6 = 8
+#   04: 00   temperature high byte
+#   05: 19   temperature low byte  (0x0019 = 25 degrees C signed)
+#   06: CRC high
+#   07: CRC low
+#
+# Note: RaspakTempVn checks si==0x8 (len must equal exactly 8)
+#
+XX 5D 01 02 00 19 <CRC_HI> <CRC_LO>
+
+# Example 4: Analog response (type 0x86)
+#
+#   00: XX   start byte
+#   01: 86   type: analog
+#   02: 01   device address
+#   03: N    analog item count (max 0x37 = 55)
+#   04+: N bytes of analog payload (format internal to tag structure)
+#   ...: CRC high, CRC low
+#
+# Example with N=4 (total length = 4 + 6 = 10):
+XX 86 01 04 AA BB CC DD <CRC_HI> <CRC_LO>
