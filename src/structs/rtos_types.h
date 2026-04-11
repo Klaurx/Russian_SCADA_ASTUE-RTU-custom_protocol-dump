@@ -9,6 +9,7 @@
  *   libkanaldrv.so.1. Constructor at offset 0x6086. RaspakKeys at 0x66de.
  *   libsystypes.so.1 symbol table including _MakeKvitok, _PriemPacket,
  *   _AnalizBufPriem, _AnalizPriem, _MakeNextPachka, _PrepareBufRetr.
+ *   cp104send nm output for TimeCorrectGo and SOST_TIME_CORRECT usage.
  *
  * Compiler: GCC 4.3.3, QNX Neutrino i386.
  *
@@ -99,10 +100,12 @@ struct SOST_SEND {
  *
  * GPS time correction state. Lives at kanaldrv object offset +0x1e4.
  * Passed to AnalizBufPriem and IsTimeCorrectAllow.
+ * Also passed to TimeCorrectGo(SOST_TIME_CORRECT*, unsigned short, long)
+ * in the cp104send binary.
  *
  * CONFIRMED: 16 bytes at obj+0x1e4.
  * ESTIMATED: internal field layout from field naming conventions and the
- *   time correction function signatures in qmicro.
+ *   time correction function signatures in qmicro and cp104send.
  */
 struct SOST_TIME_CORRECT {
     int32_t  correction_ms;  /* +0x0  time offset from GPS reference in ms */
@@ -123,7 +126,7 @@ struct SOST_TIME_CORRECT {
  * CONFIRMED: 6 bytes copied by MakeSrezWithFictiveTime into frame offsets 1-6
  *   via a memcpy of sizeof(TIME_SERVER_KANAL) = 6 bytes.
  * CONFIRMED BCD format from GPS time conversion functions ConvLocToSerKan in
- *   both the qcet and Aqalpha/pusclass binaries.
+ *   the qcet, Aqalpha, qpuso, qmir, qpty, and qptym binaries.
  * INFERRED: field ordering YY MM DD HH MM SS based on conventional BCD time
  *   formats and consistency with annotated frame examples.
  */
@@ -155,6 +158,27 @@ struct TIME_SERVER {
 
 
 /*
+ * EV_TIME
+ *
+ * Event timestamp structure used by libjevent.so for journal entries.
+ * Passed to WriteEventTs(unsigned char, EV_TIME*) and
+ * WriteEventUsoLink(unsigned char, unsigned short, EV_TIME*).
+ *
+ * ESTIMATED: layout based on the SYSTEMTIME pattern extended with a
+ *   millisecond field for sub-second event timestamping.
+ */
+struct EV_TIME {
+    uint16_t year;
+    uint16_t month;
+    uint16_t day;
+    uint16_t hour;
+    uint16_t minute;
+    uint16_t second;
+    uint16_t milliseconds;
+};
+
+
+/*
  * SYSTEMTIME
  *
  * Windows-compatible SYSTEMTIME structure used as output from GetLocalTime.
@@ -163,6 +187,7 @@ struct TIME_SERVER {
  * CONFIRMED: presence in multiple function signatures throughout the firmware.
  *   ConvertTimeToSystem(TIME_SERVER*, SYSTEMTIME*) and
  *   ConvertTimeKanalToSystem(TIME_SERVER_KANAL*, SYSTEMTIME*) in libsystypes.
+ *   Also used by cmdbf::TestTime(SYSTEMTIME*) in stem300 and mdbf80.
  */
 struct SYSTEMTIME {
     uint16_t wYear;
@@ -202,7 +227,9 @@ struct RTOS_SREZ_HEADER {
  * Capability bitmap exchanged during driver initialisation. Used by
  * usodrv::SetSupportTypes and usodrv::GetSupportTypes. The QMICRO method
  * UpdateTypeBuf and UpdateTypeUso update these bitmaps as USO devices
- * report their capabilities.
+ * report their capabilities. Also used as the constructor argument for
+ * aclass (Aqalpha) and comdirect, distinguishing them from the simpler
+ * usodrv subclasses that use unsigned short constructors.
  *
  * ESTIMATED: two 32-bit bitmasks based on the name semantics and the
  *   common pattern of use as a single struct argument across the codebase.
@@ -263,4 +290,135 @@ struct IDENT_PAR_KANAL {
     uint16_t nom_uso;      /* ESTIMATED: USO device number */
     uint16_t adr_uso;      /* ESTIMATED: USO device address */
     uint8_t  extra[8];     /* ESTIMATED: additional parameters */
+};
+
+
+/*
+ * MSG_SPECIAL_BUF
+ *
+ * Special buffer message for non-standard queries that bypass the typed I/O
+ * model. Used by usodrv::MakeUsoSpecialBuf(MSG_SPECIAL_BUF*, MSG_SPECIAL_BUF**)
+ * and overridden by cusom::MakeUsoSpecialBufZaprosUso and
+ * altclass::MakeUsoSpecialBuf in their respective drivers.
+ *
+ * ESTIMATED: layout based on the pass-through behaviour observed in
+ *   cusom::MakeUsoSpecialBufZaprosUso (stores input pointer to output
+ *   pointer-to-pointer, confirming the first field is a pointer).
+ *   Also used by cmdbf::MakeReadZapros(MDB_COMMAND*, MSG_SPECIAL_BUF*)
+ *   and cmdbf::MakeWriteZapros(MDB_COMMAND*, MSG_SPECIAL_BUF*) confirming
+ *   the buffer carries both the request parameters and the response data.
+ */
+struct MSG_SPECIAL_BUF {
+    uint8_t  *data;     /* ESTIMATED: pointer to the raw byte buffer */
+    uint16_t  length;   /* ESTIMATED: current data length in bytes */
+    uint16_t  capacity; /* ESTIMATED: maximum buffer capacity in bytes */
+    uint8_t   flags;    /* ESTIMATED: buffer state flags */
+};
+
+
+/*
+ * MDB_COMMAND
+ *
+ * Modbus command descriptor used by cmdbf::MakeReadZapros and
+ * cmdbf::MakeWriteZapros to describe a Modbus read or write operation.
+ * Passed from qmicro to the cmdbf polling thread via the special buffer
+ * mechanism.
+ *
+ * ESTIMATED: layout based on Modbus command structure conventions and
+ *   the four-function variant pattern (MakeZaprosRead, MakeZaprosReadTsFunc,
+ *   MakeZaprosSendTu, MakeZaprosSendTuK) seen in the cmdbf class.
+ */
+struct MDB_COMMAND {
+    uint8_t  func_code;   /* ESTIMATED: Modbus function code (0x01-0x10) */
+    uint16_t reg_addr;    /* ESTIMATED: starting register address */
+    uint16_t reg_count;   /* ESTIMATED: number of registers to read or write */
+    uint8_t  flags;       /* ESTIMATED: command modifier flags */
+};
+
+
+/*
+ * JOURNAL_CTL_TS_VALUE
+ *
+ * Event record structure used by libjevent.so for the JournalTsCtl and
+ * JournalUsoLink ring buffers. Passed to AddEventDiscret and AddEventUsoLink.
+ *
+ * ESTIMATED: layout based on the event recording pattern and the
+ *   WriteEventTs(unsigned char, EV_TIME*) call which takes a timestamp.
+ *   The ring buffers hold 1024 records each (confirmed from KolJournalTsCtl
+ *   and JournalTsCtl addresses differing by 0x400 entries).
+ */
+struct JOURNAL_CTL_TS_VALUE {
+    uint16_t point_addr;   /* ESTIMATED: I/O point address */
+    uint8_t  event_type;   /* ESTIMATED: event type code */
+    uint8_t  new_state;    /* ESTIMATED: new state value after the change */
+    EV_TIME  timestamp;    /* ESTIMATED: precise timestamp of the event */
+};
+
+
+/*
+ * TAG_TI_EVENT
+ *
+ * Teleindication change event record for the usotmj SOE journal extension.
+ * Used by cusotmj::AddTiEvent, AddEventTiInBuffer, GetAnalogFromJournal,
+ * RaspakChangeTi, RaspakChangeTs, and ReadJournalTi.
+ *
+ * ESTIMATED: layout based on the AddTiEvent signature:
+ *   AddTiEvent(TAG_TI_EVENT*, unsigned char, unsigned char,
+ *              unsigned short, TIME_SERVER*)
+ * The four value parameters map to the point type byte, value byte,
+ * point index word, and timestamp pointer.
+ */
+struct TAG_TI_EVENT {
+    uint16_t    point_index;  /* ESTIMATED: point index or address */
+    uint8_t     event_type;   /* ESTIMATED: point type or quality byte */
+    uint8_t     value;        /* ESTIMATED: new state after the change */
+    TIME_SERVER timestamp;    /* ESTIMATED: precise GPS-corrected timestamp */
+};
+
+
+/*
+ * KEY_INFO
+ *
+ * Key information structure for the UKD (control data command) authentication
+ * mechanism in cusotm. Used by GetUkdValue(KEY_INFO*, unsigned char) and
+ * MakeKeyInfo(KEY_INFO*, unsigned char*).
+ *
+ * PENDING: full layout requires disassembly of MakeKeyInfo and the UKD
+ *   frame construction in SendZaprosUkd.
+ */
+struct KEY_INFO {
+    uint8_t raw[16]; /* PENDING: contents unknown, likely a 128-bit key block */
+};
+
+
+/*
+ * DEF_PAR_VALUE
+ *
+ * Engineering parameter value structure. Used extensively by librashet.so
+ * for limit checking, timer configuration, and formula parameters. Also used
+ * by usodrv::GetParValue in altclass::KorAdr for device address resolution.
+ *
+ * ESTIMATED: layout based on the typical parameter structure pattern
+ *   in Russian SCADA firmware (value + quality + scale).
+ */
+struct DEF_PAR_VALUE {
+    float    value;    /* ESTIMATED: parameter value in engineering units */
+    uint8_t  quality;  /* ESTIMATED: quality and validity flags */
+    uint8_t  scale;    /* ESTIMATED: scale factor exponent */
+    uint16_t flags;    /* ESTIMATED: additional parameter flags */
+};
+
+
+/*
+ * EXT_DEF_BYTE
+ *
+ * Extended definition byte structure used by librashet.so for quality and
+ * mode configuration in TestRash and TestRash1.
+ *
+ * ESTIMATED: a compact bit-field struct encoding multiple boolean flags
+ *   into a single byte, with optional extended mode flags in a second byte.
+ */
+struct EXT_DEF_BYTE {
+    uint8_t mode_flags;    /* ESTIMATED: operating mode and quality bits */
+    uint8_t extended;      /* ESTIMATED: extended configuration byte */
 };
