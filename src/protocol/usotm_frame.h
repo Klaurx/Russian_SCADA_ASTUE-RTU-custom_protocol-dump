@@ -6,12 +6,8 @@
  * Recovered from disassembly of TestPriem, RaspakDiscret, RaspakAddAnalog,
  * RaspakImpuls, RaspakTempVn, RaspakTempNar, RaspakAnalog, RaspakOldAnalog,
  * AddKod, SetGroupTu, SendTuCommand, and SendTuFromQuery in the usotm binary
- * (cusotm class).
- *
- * Confidence markers:
- *   CONFIRMED   verified directly from disassembly byte offset accesses
- *   INFERRED    derived from frame length formula and context
- *   PENDING     requires direct disassembly of IsFirstByte or the vtable slot
+ * (cusotm class). Extended with findings from usotmj (cusotmj class) for the
+ * journal extension command types.
  *
  * Corrections from earlier documentation:
  *   The analog response type byte is 0x5a, not 0x86. The 0x86 value was
@@ -19,8 +15,12 @@
  *     cmp BYTE PTR [edi+0x1], 0x5a
  *
  *   The thread synchronisation path using mtx and cond is in RaspakImpuls,
- *   not in RaspakAddAnalog. The analog parser does not use mutex/condition
+ *   not in RaspakAddAnalog. The analog parsers do not use mutex/condition
  *   synchronisation.
+ *
+ *   The c_oflag masking in InitPort was incorrectly documented. No c_oflag
+ *   modification appears in the disassembly. The fields actually modified
+ *   are c_iflag (twice), c_cflag, and c_lflag.
  *
  * Authorization: view-only research license. See LICENSE.
  */
@@ -62,6 +62,12 @@
  *
  * PENDING: type bytes for RaspakOldAnalog, RaspakAddAnalog, RaspakTempNar
  *   require further disassembly.
+ *
+ * usotmj journal extension type bytes (outbound command bytes, not response
+ * type bytes -- the field device echoes these back in its responses):
+ *   MakeZaprosChangeTi outbound command type: PENDING
+ *   MakeZaprosChangeTs outbound command type: PENDING
+ *   MakeZaprosTimeKvitok outbound command type: PENDING
  */
 #define USOTM_TYPE_DISCRET      0x57  /* discrete poll response */
 #define USOTM_TYPE_IMPULS       0x56  /* impulse counter response */
@@ -70,6 +76,18 @@
 /* USOTM_TYPE_TEMPNAR: pending disassembly of RaspakTempNar */
 /* USOTM_TYPE_OLDANALOG: pending disassembly of RaspakOldAnalog */
 /* USOTM_TYPE_ADDANALOG: pending disassembly of RaspakAddAnalog */
+
+
+/*
+ * UKD command type bytes (outbound frames):
+ *   SendZaprosUkd frame byte 0: 0x5b (start)
+ *   SendZaprosUkd frame byte 1: 0x36 (UKD command type)
+ * CONFIRMED from disassembly of SendZaprosUkd (0x5b at [ebp-0x10c],
+ * 0x36 at [ebp-0x10b]).
+ */
+#define USOTM_CMD_START_BYTE    0x5B  /* start byte for all outbound frames */
+#define USOTM_CMD_UKD           0x36  /* UKD control data command */
+#define USOTM_CMD_GROUP_TU      0x04  /* group telecontrol command */
 
 
 /*
@@ -123,8 +141,7 @@ struct usotm_frame_trailer {
  *   word_count = ((N * 0xab) >> 8) >> 2
  * This formula is CONFIRMED from RaspakDiscret disassembly.
  *
- * Each status word is assembled big-endian from two consecutive bytes:
- *   high byte at buf[4 + i*2], low byte at buf[5 + i*2].
+ * Each status word is assembled big-endian from two consecutive bytes.
  *
  * Tag offsets written by RaspakDiscret (CONFIRMED):
  *   tag[+0xbc]          OR'd with 0x02 (fresh), 0x10, 0x04
@@ -134,6 +151,10 @@ struct usotm_frame_trailer {
  *   tag[+0xb4 + i*2]    received value word
  *
  * After successful parse, SendSbrosLatch(uso_index) is called (CONFIRMED).
+ *
+ * In the cusotmj journal variant, after parsing RaspakDiscret calls
+ * AddEventTsInBuffer for any changed bits to record the change with a
+ * precise GPS timestamp, then calls MakeZaprosTimeKvitok to acknowledge.
  */
 struct usotm_discret_payload {
     uint8_t status_words[]; /* N raw bytes, big-endian uint16 pairs */
@@ -186,7 +207,7 @@ struct usotm_tempvn_payload {
 
 
 /*
- * usotm_analog_payload
+ * usotm_analog_new_payload
  *
  * New-format analog response payload (type 0x5a, RaspakAnalog).
  *
@@ -213,6 +234,9 @@ struct usotm_analog_new_payload {
  * Also calls AddKod for each active channel.
  * Type byte: PENDING disassembly.
  * Used as a fallback when the new-format RaspakAnalog fails.
+ * The flag at tag[+0x477] tracks which format succeeded:
+ *   1 means old-format succeeded
+ *   0 means old-format failed
  */
 struct usotm_analog_old_payload {
     uint8_t data[]; /* raw analog data, up to 8 channels */
@@ -274,3 +298,57 @@ struct usotm_tu_queue_record {
  */
 #define USOTM_TU_QUEUE_OFFSET   0x4E28  /* start of 6-byte queue records */
 #define USOTM_TU_COUNT_OFFSET   0x5080  /* queue item count, reset to 0 after drain */
+
+
+/*
+ * Tag pending flag offsets in the cusotm device tag struct.
+ * CONFIRMED from Working() disassembly.
+ *
+ * These flags are set by qmicro when a command or data request is pending
+ * for a specific device slot. The Working() loop checks them before calling
+ * the corresponding send function.
+ */
+#define CUSOTM_TAG_PENDING_TU           0x1AE  /* uint16: pending group TU */
+#define CUSOTM_TAG_PENDING_TEMPVN       0x1B8  /* uint8: pending TempVn request */
+#define CUSOTM_TAG_PENDING_TEMPNAR      0x1B9  /* uint8: pending TempNar request */
+#define CUSOTM_TAG_PENDING_ADDANALOG    0x1BA  /* uint8: pending AddAnalog request */
+#define CUSOTM_TAG_PENDING_ANALOG       0x1BB  /* uint8: pending new analog request */
+
+
+/*
+ * Discrete word count formula.
+ * CONFIRMED from RaspakDiscret disassembly at 0x804a43f:
+ *   mul dl (dl=0xab), shr ax 8, shr bl 2
+ *
+ * This is the fixed-point approximation of N / 85 / 4 which converts the
+ * raw byte count N in the frame header into the number of 16-bit status
+ * words in the payload.
+ */
+static inline uint8_t
+usotm_discret_word_count(uint8_t raw_n)
+{
+    return (uint8_t)(((uint16_t)((raw_n * 0xABu) >> 8)) >> 2);
+}
+
+
+/*
+ * Analog frame expected length formula.
+ * CONFIRMED from RaspakAnalog: lea eax, [eax+eax*1+0xa]
+ * total_active_channels is the sum of KolBits across the 4 bitmask bytes.
+ */
+static inline uint16_t
+usotm_analog_expected_len(uint8_t total_active_channels)
+{
+    return (uint16_t)((total_active_channels * 2) + 10);
+}
+
+
+/*
+ * Impulse frame expected length formula.
+ * CONFIRMED from RaspakImpuls: same pattern as analog.
+ */
+static inline uint16_t
+usotm_impuls_expected_len(uint8_t total_active_counters)
+{
+    return (uint16_t)((total_active_counters * 2) + 10);
+}
