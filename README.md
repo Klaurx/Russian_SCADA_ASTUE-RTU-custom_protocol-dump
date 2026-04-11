@@ -7,11 +7,8 @@ publication.
 
 Read the LICENSE before examining any files.
 
-Also guys, sadly i don't think there will be any updates on this specific
-project, due to the fact im working on this as 1 person, and dealing with
-school etc. at the same time, it is very difficult to reverse engineer a
-full SCADA RTU firmware dump all alone. Sorry. But you can always check
-out other cool, simpler stuff on my page.
+Its good to mention that this specific project has *some* parts that are detailed, but its not mainly made for detailed RE of the protocols even though there will be detailed parts. This is made for architectural analysis of the RTU.
+You can find a very detailed RE of the main protocol(s) on my page. If deep RE is what you are looking for, it's not here.
 
 
 ## What This Is
