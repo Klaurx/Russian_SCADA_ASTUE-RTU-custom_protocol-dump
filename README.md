@@ -2,9 +2,7 @@
 
 Reverse engineering of a proprietary Russian industrial telemetry protocol
 stack recovered from a QNX Neutrino based SCADA remote terminal unit.
-Research conducted with explicit written permission from NCIRCC (National
-Coordination Center for Computer Incidents). All IP addresses and
-operationally sensitive identifiers have been fully redacted before
+All IP addresses and operationally sensitive identifiers have been fully redacted before
 publication.
 
 Read the LICENSE before examining any files.
@@ -356,7 +354,4 @@ Techniques used:
 
 ## Authorization
 
-Research conducted and published with explicit permission from NCIRCC
-(National Coordination Center for Computer Incidents), the Russian national
-CERT operating under the FSB. All network addresses and operationally
-sensitive identifiers have been removed or replaced with the string [REDACTED].
+NCIRCC of Russia did *Not* authorize this saying that it is out of their scope, so for that reason i will not be sharing any files. I will keep it minimal to RE only. 
