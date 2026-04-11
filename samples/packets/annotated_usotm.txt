@@ -2,7 +2,9 @@
 #
 # Synthetic frames constructed from the wire format recovered via disassembly
 # of TestPriem, RaspakDiscret, RaspakImpuls, RaspakTempVn, RaspakTempNar,
-# RaspakAnalog, and RaspakOldAnalog in the usotm binary (cusotm class).
+# RaspakAnalog, and RaspakOldAnalog in the usotm binary (cusotm class),
+# and from SendZaprosSerNom, ZaprosSetTi, ZaprosTestTs, and SetGroupTu
+# in the usom2 binary (cusom class).
 #
 # No real captured traffic is present in this repository.
 #
@@ -19,11 +21,17 @@
 # CRC covers bytes 1 through len-3 inclusive (excludes the start byte
 # and the two CRC bytes themselves). The accumulation function is a virtual
 # method at cusotm vtable offset 0x11c. Two candidate algorithms are
-# implemented in src/protocol/crc16-reconstructed.c.
+# implemented in src/protocol/crc16-reconstructed.c. A third candidate,
+# CRC-16/KERMIT (polynomial 0x8408), is confirmed used by the altclass
+# protocol family via the inner crc16() function at 0x8049e9a in qalfat.
 #
 # XX is used below to represent the start byte whose exact value is pending
 # disassembly confirmation of IsFirstByte(). The value 0x5b is strongly
 # expected based on all outbound frame headers observed.
+#
+# CRC values shown as <CRC_HI> and <CRC_LO> are placeholders that must
+# be computed with the confirmed algorithm before these frames can be used
+# for hardware testing.
 
 
 # Example 1: Discrete poll response (type byte 0x57)
@@ -32,37 +40,43 @@
 # The item count N at byte 3 drives the word count formula:
 #   word_count = (N * 0xab) >> 8 >> 2
 #
-# With N=0x40 (64): (64 * 171 = 10944, >> 8 = 42, >> 2 = 10) gives 10 words.
-# With N=0x04 (4):  (4 * 171 = 684, >> 8 = 2, >> 2 = 0) gives 0 words.
-# With N=0x10 (16): (16 * 171 = 2736, >> 8 = 10, >> 2 = 2) gives 2 words.
+# Word count examples:
+#   N=0x04 (4):  (4 * 171 = 684, >> 8 = 2, >> 2 = 0) gives 0 words
+#   N=0x08 (8):  (8 * 171 = 1368, >> 8 = 5, >> 2 = 1) gives 1 word
+#   N=0x10 (16): (16 * 171 = 2736, >> 8 = 10, >> 2 = 2) gives 2 words
+#   N=0x40 (64): (64 * 171 = 10944, >> 8 = 42, >> 2 = 10) gives 10 words
+#   N=0xab (171): (171 * 171 = 29241, >> 8 = 113, >> 2 = 28) gives 28 words
 #
 # Each word is assembled big-endian: high byte at buf[4 + i*2],
 # low byte at buf[5 + i*2].
 #
-# Status flags written by RaspakDiscret:
-#   tag[+0xbc] OR'd with 0x02 (fresh), 0x10, and 0x04
+# Status flags written by RaspakDiscret (confirmed from disassembly):
+#   tag[+0xbc] OR'd with 0x02 (fresh), 0x10, 0x04
 #   tag[+0x04 + i*2] current value word
 #   tag[+0x0c + i*2] mask word
 #   tag[+0xc8 + i*2] previous value word
 #   tag[+0xb4 + i*2] received value word
 #
-# After successful parse, SendSbrosLatch(uso_index) is called to send a
-# latch reset frame back to the device.
+# After successful parse, SendSbrosLatch(uso_index) is called to send
+# a latch reset frame back to the device.
 #
 # Minimal frame with N=0 (no payload words, total length = 6):
 XX 57 01 00 <CRC_HI> <CRC_LO>
 #
 # Frame with N=0x10 giving 2 status words (total length = 0x10 + 6 = 22):
 # XX 57 01 10 FF 0F AA BB 00 00 00 00 00 00 00 00 00 00 00 00 <CRC_HI> <CRC_LO>
+# bytes 4-5: first status word = 0xFF0F
+# bytes 6-7: second status word = 0xAABB
+# bytes 8-19: remaining 12 bytes of N=16 payload (zero in this example)
 
 
 # Example 2: Impulse counter response (type byte 0x56)
 #
 # RaspakImpuls at 0x804b2ae processes this type.
-# The thread synchronisation path using mtx at 0x804eec8 and cond at 0x804eed0
-# is in this function, not in the analog parser.
+# The thread synchronisation path using mtx at 0x804eec8 and cond at
+# 0x804eed0 is in this function, not in any analog parser.
 #
-# Byte 3 (N) is the raw payload byte count (N items of data bytes total).
+# Byte 3 (N) is the raw payload byte count.
 # Total frame length = N + 6.
 #
 # Bytes 4 through 7: a 4-byte bitmask covering 32 counter positions (bits 0-31).
@@ -75,7 +89,7 @@ XX 57 01 00 <CRC_HI> <CRC_LO>
 #
 # Counter delta computation in RaspakImpuls:
 #   if new > prev:  delta = new minus prev
-#   if new < prev and prev > 0x7fff: delta = bitwise NOT(prev) + 1 + new (rollover)
+#   if new < prev and prev > 0x7fff: delta = bitwise NOT(prev) + 1 + new (16-bit rollover)
 #   if new < prev and prev <= 0x7fff: delta via lookup table at tag[+0xb0+counter*2+0xc]
 #   if new == prev: no change
 #
@@ -87,10 +101,10 @@ XX 57 01 00 <CRC_HI> <CRC_LO>
 # total frame length = 8 + 6 = 14
 XX 56 01 08 03 00 00 00 00 05 00 0A <CRC_HI> <CRC_LO>
 # byte 3: N=8 (4 bitmask bytes + 4 data bytes = 8 payload bytes)
-# bytes 4-7: bitmask 0x00000003 (counters 0 and 1)
-# bytes 8-9: counter 0 value = 0x0005
-# bytes 10-11: counter 1 value = 0x000a
-# bytes 12-13: CRC
+# bytes 4-7: bitmask 0x00000003 (little-endian: counters 0 and 1 active)
+# bytes 8-9: counter 0 value = 0x0005 (big-endian)
+# bytes 10-11: counter 1 value = 0x000a (big-endian)
+# bytes 12-13: CRC high and low bytes
 
 
 # Example 3: Internal temperature response (type byte 0x5d)
@@ -105,11 +119,12 @@ XX 56 01 08 03 00 00 00 00 05 00 0A <CRC_HI> <CRC_LO>
 # Stored at tag[+0x1b4] as int32.
 # Fresh data flag at tag[+0x1be] is set to 1.
 #
-# Example: temperature 0x0019 = 25 degrees Celsius signed:
+# Example: temperature 0x0019 = +25 degrees Celsius (signed):
 XX 5D 01 02 00 19 <CRC_HI> <CRC_LO>
 #
-# Negative temperature example: 0xffe7 = minus 25 degrees Celsius:
+# Negative temperature example: 0xffe7 = -25 degrees Celsius (signed 16-bit):
 # XX 5D 01 02 FF E7 <CRC_HI> <CRC_LO>
+# Two's complement: -25 = 0xFFE7 as 16-bit signed integer.
 
 
 # Example 4: External temperature response (type byte unconfirmed)
@@ -125,7 +140,8 @@ XX 5D 01 02 00 19 <CRC_HI> <CRC_LO>
 #
 # RaspakAnalog at 0x804ad62 processes this type.
 # CORRECTION: Earlier documentation listed 0x86 as the analog type byte.
-# The confirmed type byte from disassembly is 0x5a.
+# The confirmed type byte from disassembly at 0x804ada8 is 0x5a:
+#   cmp BYTE PTR [edi+0x1], 0x5a
 #
 # Bytes 4 through 7: a 4-byte bitmask covering 32 channel positions.
 # The active channel count is the sum of KolBits called on each of the
@@ -141,9 +157,24 @@ XX 5D 01 02 00 19 <CRC_HI> <CRC_LO>
 # Example with 4 active channels in byte 0 of the bitmask (bits 0,1,2,3 set):
 # bitmask = 0x0000000f, total_active = 4, expected_len = (4*2) + 10 = 18
 # XX 5A 01 08 0F 00 00 00 01 F4 03 E8 05 DC 07 D0 <CRC_HI> <CRC_LO>
-# byte 3: N=8 (4 bitmask + 8 data = 8 payload bytes in this interpretation)
-#   Note: N is the raw payload byte count, total = N+6 = 14 in the TestPriem check
-#   The KolBits calculation independently validates the length
+# byte 3: N=8 (4 bitmask bytes + 8 data bytes = but wait: N=8 gives len=14,
+#   while expected_len is 18. The N field in the header encodes the raw payload
+#   byte count differently from what the length check expects.)
+#
+# Note on N encoding for analog frames:
+# The expected_len formula is (active * 2) + 10. This accounts for:
+#   4 header bytes + 4 bitmask bytes + (active * 2) data bytes + 2 CRC bytes
+# The N field at buf[3] must satisfy: N + 6 = total_len = (active*2) + 10
+# Therefore N = (active * 2) + 4, which for 4 active channels gives N=12.
+# Example corrected:
+# XX 5A 01 0C 0F 00 00 00 01 F4 03 E8 05 DC 07 D0 <CRC_HI> <CRC_LO>
+# byte 3: N=0x0C (12) = 4 bitmask bytes + 8 data bytes = 12
+# bytes 4-7: bitmask 0x0000000f (channels 0,1,2,3 active)
+# bytes 8-9:   channel 0 value = 0x01F4 = 500
+# bytes 10-11: channel 1 value = 0x03E8 = 1000
+# bytes 12-13: channel 2 value = 0x05DC = 1500
+# bytes 14-15: channel 3 value = 0x07D0 = 2000
+# bytes 16-17: CRC high and low
 
 
 # Example 6: Old-format analog response (type byte pending disassembly)
@@ -151,13 +182,14 @@ XX 5D 01 02 00 19 <CRC_HI> <CRC_LO>
 # RaspakOldAnalog at 0x804ac0e handles the legacy analog format.
 # Loop bound is 8 channels (confirmed: cmp ebx, 0x8).
 # Also calls AddKod for each active channel.
-# The fallback path in SendZaprosAnalog tries RaspakOldAnalog only after
-# RaspakAnalog (type 0x5a) fails. The flag at tag[+0x477] tracks success:
+# The fallback path in SendZaprosAnalog tries RaspakAnalog first (type 0x5a),
+# and on failure falls back to calling SendBuffer with a 5-byte frame and then
+# RaspakOldAnalog. The flag at tag[+0x477] tracks success:
 #   1 means old-format succeeded
 #   0 means old-format failed
 
 
-# Example 7: Discrete output (telecontrol) command frame (outbound)
+# Example 7: Discrete output (telecontrol) command frame (outbound, USOTM)
 #
 # SetGroupTu builds this 18-byte frame and sends it to the USO device.
 # This is an outbound frame from the RTU to the field device.
@@ -173,18 +205,73 @@ XX 5D 01 02 00 19 <CRC_HI> <CRC_LO>
 # Bytes 15-17: padding to reach 18 total bytes
 #
 # Example activate frame (device 0x01, single point at bit 0):
+# mask = 0x0001, NOT(mask) << 16 = 0xFFFE0000
+# bitmask_enc = 0xFFFE0001 stored as 4 bytes
 5B 04 01 00 DE AD BE EF 00 00 FF FE 00 01 01 00 00 00
 
 
-# Example 8: Individual TU command frame (outbound, from SendTuCommand)
+# Example 8: Individual TU command frame (outbound, USOTM SendTuCommand)
 #
 # SendTuCommand builds a 7-byte frame (confirmed: 0x7 stored at [esp+0x8]).
 # This is shorter than the SetGroupTu frame and handles single-point commands.
 #
 # Byte 0: 0x5b  start byte
 # Byte 1: encoded address and activate/deactivate flag
-# Bytes 2-6: command-specific encoding
+# Bytes 2-6: command-specific encoding including BCD-encoded point address
 #
-# Frame length 7 bytes confirmed from the call:
-#   c7 44 24 08 07 00 00 00  mov DWORD PTR [esp+0x8], 0x7
+# The address encoding uses: imul eax, eax, 0x147b followed by shift and
+# subtract sequence to compute a BCD-like decimal remainder.
+# Frame length 7 bytes confirmed from: mov DWORD PTR [esp+0x8], 0x7
 # followed by lea ebx, [ebp-0x108] and call SendBuffer.
+5B XX XX XX XX XX 00
+
+
+# Example 9: USOM serial number query (outbound, usom2 SendZaprosSerNom)
+#
+# Command type: 0x5f (confirmed from disassembly at 0x0804b0e5)
+# Frame length: 4 bytes (confirmed from the constant 4 passed to SendBuffer)
+#
+# Byte 0: 0x5b  start byte
+# Byte 1: 0x5f  serial number query command
+# Byte 2: tag[0] device address byte
+# Byte 3: 0x00  reserved
+#
+# This frame has no CRC because it is only 4 bytes and the standard USOTM
+# frame structure (N + 6 minimum) would require a 6-byte minimum. The USOM
+# serial number query is a special short frame that does not follow the
+# standard framing. The field device responds with its serial number in a
+# standard framed response.
+5B 5F 01 00
+
+
+# Example 10: USOM SetTi command (outbound, usom2 ZaprosSetTi)
+#
+# Command type: 0x6b (confirmed from disassembly at 0x0804b36e)
+# Frame length: 21 bytes (0x15 confirmed from the constant at 0x0804b447)
+#
+# Byte 0:     0x5b  start byte
+# Byte 1:     0x6b  SetTi command (writable teleindication)
+# Byte 2:     tag[0] device address
+# Byte 3:     0x00  reserved
+# Byte 4:     0xff  broadcast flag (all points)
+# Bytes 5-20: 8 slot pairs, each 2 bytes big-endian (high byte then low byte)
+#             zero for slots with no pending write
+#
+# Example: write value 0x0100 to slot 0, all other slots zero:
+5B 6B 01 00 FF 01 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+
+
+# Example 11: USOM TestTs command (outbound, usom2 ZaprosTestTs)
+#
+# Command type: 0x63 (confirmed from disassembly at 0x0804b7c5)
+# Frame length: 5 bytes (confirmed from the constant 5 at 0x0804b7f8)
+#
+# Byte 0: 0x5b  start byte
+# Byte 1: 0x63  TestTs command (test telestatus loopback)
+# Byte 2: tag[0] device address
+# Byte 3: 0x01  test mode flag (1 = active test)
+# Byte 4: 0x01  activation flag
+#
+# The field device echoes back type byte 0x63 in its response, which is
+# validated by RaspakTestDiscret before reading the test result data.
+5B 63 01 01 01
