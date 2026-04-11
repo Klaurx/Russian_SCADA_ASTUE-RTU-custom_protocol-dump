@@ -17,6 +17,12 @@ RaspakAnalog, RaspakOldAnalog) before any payload parsing begins. Failure
 causes the caller to invoke AddError(uso_index) and return 0 immediately
 without touching the payload bytes.
 
+The same three-check validation structure is used by cusom::TestPriem in
+the usom and usom2 binaries at their respective addresses, and by the cmdbf
+class via its CheckCRC method. The KPRIS driver has its own five-parameter
+TestPriem that shares no code with this function.
+
+
 ## Disassembly Walkthrough
 
 The function entry establishes its frame, then immediately checks the
@@ -66,11 +72,10 @@ Two candidate algorithms are implemented in crc16-reconstructed.c:
   CRC16 CCITT using the polynomial 0x1021 (unreflected). This is a common
     alternative for serial protocols in embedded systems.
 
-A separate CRC function MCRC16 appears in the Aqalpha, qcet, and qpuso
-binaries. A function RC16 appears in cicpcon. A function FCRC16 appears in
-Aqalpha and qpuso. The multiplicity of CRC functions suggests different
-protocol layers use different algorithms, and the USOTM accumulator may not
-match any of them.
+Note that the qalfat (altclass) protocol uses a third algorithm, CRC-16/KERMIT
+with polynomial 0x8408, which is the reflected form of 0x1021. The USOTM
+accumulator at vtable offset 0x11c may use any of these three algorithms.
+Disassembly of the vtable slot is required for confirmation.
 
 After the loop, the checksum is split and compared against the frame tail:
 
@@ -87,7 +92,7 @@ After the loop, the checksum is split and compared against the frame tail:
 ```
 
 The CRC is stored high byte first at buf[len-2] and low byte second at
-buf[len-1]. This is the standard network byte order for a 16-bit checksum.
+buf[len-1]. This is network byte order (big-endian) for the 16-bit checksum.
 
 Final length consistency check:
 
@@ -101,6 +106,7 @@ Final length consistency check:
 The function returns 1 (valid) only if all three conditions pass: minimum
 length satisfied, CRC matches, and the payload count is consistent with
 the total frame length.
+
 
 ## Frame Layout Derived from Length Formula
 
@@ -134,12 +140,14 @@ For analog frames with type 0x5a, N is the raw payload byte count and the
 actual active channel count is the sum of set bits across bytes 4 through 7,
 computed by calling KolBits on each byte separately.
 
+
 ## Return Values
 
 ```
 0   invalid: frame too short, CRC mismatch, or length inconsistency
 1   valid: all three checks passed
 ```
+
 
 ## Callers
 
@@ -156,10 +164,26 @@ Every Raspak function in cusotm calls TestPriem as its first action:
 All callers share the same failure pattern: call AddError(uso_index) and
 return 0 immediately without parsing any payload bytes.
 
+The cusotmj binary has the same Raspak functions at similar addresses, with
+the addition of RaspakChangeTi and RaspakChangeTs which also call TestPriem
+as their first action before extracting change event data.
+
+
+## Note on cusom::TestPriem
+
+The cusom class (USOM field bus driver) has its own TestPriem method at
+address 0x0804952e in usom and 0x0804952e in usom2, with the same two-parameter
+signature as cusotm::TestPriem. The usom variant follows the same three-check
+structure (minimum length, CRC, length consistency) but the CRC range differs:
+the cusom version accumulates bytes from buf[1] through buf[len-3], the same
+range as cusotm, confirming that USOTM and USOM share the same CRC coverage
+convention even though they may use different CRC algorithms.
+
+
 ## Note on ckpris::TestPriem
 
-The ckpris class (KPRIS protocol driver) has its own TestPriem method at
-0x804b052 with a different signature:
+The ckpris class (KPRIS protocol driver) has its own TestPriem method with
+a completely different five-argument signature:
 
   ckpris::TestPriem(unsigned char, unsigned char*,
                     unsigned short&, unsigned char, unsigned char)
@@ -167,4 +191,23 @@ The ckpris class (KPRIS protocol driver) has its own TestPriem method at
 This five-argument version is completely independent of cusotm::TestPriem.
 It validates KPRIS protocol frames using KPRIS-specific framing rules. The
 two TestPriem implementations share no code and validate different frame
-formats. Earlier documentation did not distinguish between them.
+formats. The reference parameter (unsigned short&) as the third argument
+indicates the parsed frame length is returned by reference, allowing the
+caller to continue processing after validation without re-parsing the length
+field.
+
+
+## Note on cmdbf::TestPriem
+
+The cmdbf class (STEM-300 and CMDBF meter driver) has its own TestPriem
+at address 0x080499f0 in the stem300 binary and 0x08049ca0 in the mdbf80
+binary. Both share the two-parameter signature (unsigned char*, unsigned short).
+The cmdbf version calls CheckCRC which uses the Modbus CRC table pair
+(auchCRCHi/auchCRCLo) confirmed by symbol name, making the cmdbf CRC
+algorithm unambiguously Modbus CRC16 with polynomial 0xa001.
+
+The cmdbf FL_NoRazdel global controls separator logic in the frame parser:
+when set, the separator byte between data fields is not expected and frames
+are parsed without separator validation. This suggests the CMDBF protocol
+has two framing variants (with and without field separators) controlled by
+device-specific configuration.
