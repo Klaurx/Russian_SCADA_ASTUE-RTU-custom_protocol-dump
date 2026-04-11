@@ -7,8 +7,9 @@ publication.
 
 Read the LICENSE before examining any files.
 
-Its good to mention that this specific project has *some* parts that are detailed, but its not mainly made for detailed RE of the protocols even though there will be detailed parts. This is made for architectural analysis of the RTU.
-You can find a very detailed RE of the main protocol(s) on my page. If deep RE is what you are looking for, it's not here.
+This project focuses on architectural analysis of the RTU firmware, 
+mapping the software stack, protocol family, hardware platform, and binary inventory. 
+Some protocol internals are documented in detail where they were needed to understand the architecture, but deep protocol RE is not the goal here. For a complete reverse engineering of the main protocol(s), see my other repository which i fully RE'd the main protocols. 
 
 
 ## What This Is
