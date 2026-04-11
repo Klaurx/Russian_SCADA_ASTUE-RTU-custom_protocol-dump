@@ -26,11 +26,11 @@
  * CONFIRMED from MakeSrezBuf disassembly.
  *
  * Note on RTOS_TYPE_FICTIVE: the value 0x82 is produced in the original
- * binary by a compiler-emitted SBB (subtract with borrow) sequence rather
- * than a direct constant load. The arithmetic is 0x75 minus 0x73 with the
- * carry flag set, yielding 0x82. This is a compiler artifact from the
- * way the condition was written in the source code, not a manually chosen
- * magic value.
+ * binary by a compiler-emitted SBB (subtract with borrow) instruction
+ * sequence rather than a direct constant load. The arithmetic is
+ * 0x75 minus 0x73 with the carry flag set, yielding 0x82. This is a
+ * compiler artifact from the way the condition was written in the source
+ * code, not a manually chosen magic value.
  */
 #define RTOS_TYPE_FICTIVE       0x82  /* fictive timestamp, GPS unavailable */
 #define RTOS_TYPE_NORMAL        0x7F  /* normal data buffer */
@@ -54,10 +54,18 @@
  *
  * The flag byte indicates whether the data in this item is fresh (newly
  * received from the field) or stale (carried over from a previous cycle).
+ * The named bit positions within each flag byte:
+ *   Discrete:  bit 1 (0x02) = data is fresh
+ *   Analog:    bit 2 (0x04) = data is fresh
+ *   Impulse:   bit 0 (0x01) = data is fresh
  */
-#define RTOS_FLAG_DISCRET_OFFSET  0x1B  /* bit 1 set means data is fresh */
-#define RTOS_FLAG_ANALOG_OFFSET   0x61  /* bit 2 set means data is fresh */
-#define RTOS_FLAG_IMPULS_OFFSET   0x0C  /* bit 0 set means data is fresh */
+#define RTOS_FLAG_DISCRET_OFFSET  0x1B
+#define RTOS_FLAG_ANALOG_OFFSET   0x61
+#define RTOS_FLAG_IMPULS_OFFSET   0x0C
+
+#define RTOS_FLAG_DISCRET_FRESH   0x02
+#define RTOS_FLAG_ANALOG_FRESH    0x04
+#define RTOS_FLAG_IMPULS_FRESH    0x01
 
 
 /*
