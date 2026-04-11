@@ -1,365 +1,414 @@
-# usotmj SOE Journal Extension Analysis (progr/usotmj)
+# Transport Layer Driver Analysis
 
-## Binary Identity
+## Overview
 
-Binary name: usotmj. Class name: cusotmj. Source file: usotmj.cc.
-Base class: cusotm (which itself subclasses usodrv).
-Build date: December 9, 2024, consistent with the main firmware release.
+The transport layer in this firmware consists of all drivers that subclass
+kanaldrv and implement the RTOS link layer over various physical transports.
+The kanaldrv base class provides the Obmen() session loop, the srez frame
+construction, and the command dispatch table. Each transport subclass provides
+the physical read and write operations by implementing a specific set of
+virtual method slots.
 
-The cusotmj class is a direct extension of cusotm and shares its serial port
-hardware interface, termios configuration, frame format, CRC algorithm, and
-all of the base polling functions. The extension adds a full SOE (sequence
-of events) journaling layer on top of the base cyclic polling model.
+All transport drivers share the same binary structure: a main() function
+that instantiates the transport class, calls RaspakKeys() to parse command
+line arguments, and then calls StartDrv() which spawns the Obmen() working
+thread. The transport object persists for the lifetime of the process.
 
-Both usotm and usotmj can be deployed for the same physical field bus. The
-choice between them is made in the start.ini Uso= line. The project
-configuration in project/start.ini uses usotm. A deployment that requires
-timestamped event capture with sub-second resolution would use usotmj instead.
-
-
-## What SOE Journaling Means in This Context
-
-In the base cusotm driver, each polling cycle reads the current state of all
-discrete and analog points and writes the values into the shared memory
-segments /SostDiscrets and /SostAnalogs. Change detection is performed by
-qmicro comparing the new values against previously stored values. The
-timestamp assigned to any detected change is the time of the poll cycle that
-detected it, which may be up to one full poll period after the actual event.
-
-In the cusotmj extension, change-driven polling replaces cyclic polling for
-telestatus and teleindication. Instead of reading the current state on each
-cycle, the driver requests from the field device a list of changes that have
-occurred since the last acknowledged change, each carrying a precise device-
-side timestamp. This allows sub-second event timestamping even when the poll
-cycle period is several seconds.
-
-The journal layer stores received events in an internal ring buffer keyed
-by device index and sequence number. qmicro reads from this journal via the
-GetDiscretFromJournal and GetAnalogFromJournal methods rather than from the
-shared memory state segments, and passes the timestamped events to libjevent.so
-for permanent storage.
+The transport drivers are loaded by qmicro from the [Kanals] section of
+start.ini. Each Kanal= line specifies the driver binary name and its
+parameters. The a parameter sets the unit address (stored at obj+0x4 in the
+kanaldrv object), and the i parameter sets IP and port configuration for
+network transports.
 
 
-## TypeUsoJournal Global
+## ctcpqnx TCP Channel (progr/tcpqnx)
 
-The TypeUsoJournal global at address 0x0804fa82 (confirmed from nm, type D,
-initialised data) is the single most important difference between usotmj and
-usotm at the binary interface level. It is a device type discriminator that
-qmicro checks at driver load time to determine whether the loaded USO driver
-supports the journal extension interface. If TypeUsoJournal is non-zero,
-qmicro uses the journal-capable method dispatch for that driver. If it is
-zero (as in usotm), qmicro uses the standard cyclic polling dispatch.
+Class name: ctcpqnx. Source file: qnxgprs.cc (not tcpqnx.cc).
 
-TypeUso at 0x0804fa80 is present in both usotm and usotmj and identifies the
-base protocol family. TypeUsoJournal is the additional flag that enables the
-extended journal API.
+This is a critical finding: the strings section of progr/tcpqnx contains
+the source file name qnxgprs.cc rather than tcpqnx.cc or ctcpqnx.cc. The
+global variable gsmlink at 0x0804ac40 is also present. This confirms that
+the progr/tcpqnx binary is the GPRS-specific TCP channel driver compiled
+from the qnxgprs.cc source, not a general-purpose TCP driver.
 
+The binary links against libkanaldrv.so.1 and libsocket.so.2. It requires
+the initkandrv vtable functions for the initialisation handshake sequence:
+AnalizBufInitPriem, InitBuffers, _InitKanal, initkandrv constructor and
+destructor, InitSend, PriemKvitEvent, SendInitBuffer.
 
-## Method Table
-
-All methods confirmed from nm of the usotmj binary. Methods shared with
-cusotm are listed briefly; extended methods are documented in detail.
-
-Methods inherited from cusotm (confirmed present in usotmj):
+Methods confirmed from nm:
 
 ```
-cusotm::AddDoutInQuery(unsigned char, unsigned short, unsigned char,
-                       unsigned short)
-cusotm::AddError(int)
-cusotm::AddKod(int, int, int)
-cusotm::AddOK(int)
-cusotm::AddUserDataAnalog(...)
-cusotm::AddUserDataDiscret(...)
-cusotm::AddUserDataImpuls(...)
-cusotm::AddUserDataUso(...)
-cusotm::GetAddAnalog(MSG_GET_PARAM*, MSG_RETURN_ANALOG*)
-cusotm::GetAnalog(MSG_GET_PARAM*, MSG_RETURN_ANALOG*)
-cusotm::GetDiscret(MSG_GET_PARAM*, MSG_RETURN_DISCRET*)
-cusotm::GetImpuls(MSG_GET_PARAM*, MSG_RETURN_IMPULS*)
-cusotm::GetSostUso(unsigned short)
-cusotm::GetUkdValue(KEY_INFO*, unsigned char)
-cusotm::GetUsomTag(iocuso*)
-cusotm::InitPort()
-cusotm::IsFirstByte(unsigned char)
-cusotm::KolBits(unsigned short)
-cusotm::MakeKeyInfo(KEY_INFO*, unsigned char*)
-cusotm::MakeWord(unsigned short, unsigned short)
-cusotm::RaspakAddAnalog(int, unsigned char*, unsigned short)
-cusotm::RaspakAnalog(int, unsigned char*, unsigned short)
-cusotm::RaspakDiscret(int, unsigned char*, unsigned short, int)
-  note: this version takes an extra int parameter compared to the base
-  cusotm::RaspakDiscret which takes only (int, unsigned char*, unsigned short)
-cusotm::RaspakImpuls(int, unsigned char*, unsigned short)
-cusotm::RaspakKvitUkd(int, unsigned char*, unsigned short)
-cusotm::RaspakOldAnalog(int, unsigned char*, unsigned short)
-cusotm::RaspakTempNar(int, unsigned char*, unsigned short)
-cusotm::RaspakTempVn(int, unsigned char*, unsigned short)
-cusotm::RaspakUkd(int, unsigned char*, unsigned short)
-cusotm::SendBuffer(unsigned char*, unsigned short)
-cusotm::SendSbrosLatch(int)
-cusotm::SendSinhroTime()
-cusotm::SendTuCommand(unsigned char, unsigned short, unsigned char,
-                      unsigned short)
-cusotm::SendTuFromQuery()
-cusotm::SendTu(int)
-cusotm::SendZaprosAddAnalog(int)
-cusotm::SendZaprosAnalog(int)
-cusotm::SendZaprosImpuls(int)
-cusotm::SendZaprosTempNar(int)
-cusotm::SendZaprosTempVn(int)
-cusotm::SendZaprosUkd(int)
-cusotm::SetDout(MSG_SET_DOUT*, MSG_RETURN_DOUT*)
-cusotm::SetGroupTu(int)
-cusotm::TestPriem(unsigned char*, unsigned short)
-cusotm::WaitOtvet(unsigned char*, unsigned short)
-cusotm::Working()
+ctcpqnx::ctcpqnx()                    default constructor
+ctcpqnx::~ctcpqnx()                   destructor, three variants
+ctcpqnx::CloseInitKanal()             close the init-phase TCP channel
+ctcpqnx::CloseSeans()                 close the data-phase TCP session
+ctcpqnx::ErrorInitKanal()             handle initialisation failure
+ctcpqnx::GetStaticTimeSend()          returns static transmit timing (0.0)
+ctcpqnx::InitKanal()                  TCP connect and bind sequence
+ctcpqnx::RaspakKeys(int, char**)      parse command line: a, i parameters
+ctcpqnx::ReadByteFromInitKanal(unsigned char*)  read from init channel
+ctcpqnx::ReadByteFromKanal(unsigned char*)      read from data channel
+ctcpqnx::ReadByteKvitokFromInitKanal(int, unsigned char*)
+  read a kvitok byte during the initialisation handshake
+ctcpqnx::ReadInitStartKvitok(int)
+  read and validate the initial handshake kvitok from the SCADA master
+ctcpqnx::SendBufToKanal(unsigned char*, unsigned short)  transmit data
+ctcpqnx::SendInitBufToKanal(unsigned char*, unsigned short)  transmit init
+ctcpqnx::SendInitKvitokBuffer(int)    send the init-phase kvitok
+ctcpqnx::TimeReInitKanal()            close and reopen the TCP connection
 ```
 
-Methods exclusive to cusotmj (the SOE journal extensions):
+The ctcp global at 0x0804bea0 is the singleton ctcpqnx instance.
+
+The ReadKvitok method (imported as kanaldrv::ReadKvitok(unsigned short))
+is used during the initialisation handshake to read the SCADA master's
+sequence acknowledgment. This import is present in tcpqnx but absent from
+the simpler udpqnx, confirming the TCP transport has a more complex
+initialisation handshake than UDP.
+
+The MakeAdrBuf and SendBuffer methods are imported from kanaldrv and confirm
+this transport participates in the full RTOS address frame and buffer
+transmission protocol.
+
+The local IP and port are stored at object offsets +0x20034 (local IP string)
+and +0x2005c (local port), and the remote IP and port at +0x20048 (remote IP)
+and +0x2005e (remote port), parsed from the i command line parameter.
+
+
+## ctcpqnx TCP Channel Variant 2 (progr/tcpqnx second binary)
+
+A second ctcpqnx binary exists in the firmware with a different method set.
+This variant (confirmed from the simpler nm output) omits the init-phase
+methods (ReadByteFromInitKanal, ReadByteKvitokFromInitKanal, ReadInitStartKvitok,
+SendInitBufToKanal, SendInitKvitokBuffer, ErrorInitKanal, CloseInitKanal)
+and adds CloseInitKanal to the deletion sequence. This simpler variant is
+the standard TCP data channel without the full RTOS handshake protocol. It
+imports from initkandrv for the base class initialization but delegates the
+init sequence entirely to initkandrv rather than implementing it.
+
+
+## ctcpqnx Alarm Channel (progr/tcparm)
+
+Class name: ctcpqnx (same class). Source file: tcparm.cc.
+
+The critical difference from the other ctcpqnx variants: tcparm links against
+libkanalarm.so.1 rather than libkanaldrv.so.1. The libkanalarm.so.1 library
+has not been recovered as a standalone file in the firmware image, suggesting
+it is either statically linked into tcparm or resides in a firmware partition
+not included in this analysis set.
+
+The method set is the same as the simpler ctcpqnx variant, with the same
+socket functions but without the extended init-phase methods. The alarm
+channel semantics likely involve different timeout values, priority queuing
+for alarm events, or a distinct acknowledgment protocol that prevents alarm
+messages from being held behind regular data traffic.
+
+tcparm is loaded when the [Kanals] section of start.ini includes a Kanal=tcparm
+line. In the recovered configurations (both progr/start.ini and project/start.ini),
+tcparm is not active, but its presence in the binary set confirms it is available
+for deployments that require a separate alarm channel.
+
+
+## cudpqnx UDP Channel (progr/udpqnx)
+
+Class name: cudpqnx. Source file: identified from class typeinfo.
+
+The binary links against libkanaldrv.so.1 and libsocket.so.2. It uses
+recvfrom and sendto rather than recv and send, confirming datagram-mode UDP
+without connection establishment. select is used for receive readiness checking
+with timeout.
+
+The My_Port global at 0x0804a9e0 holds the local bind port. The MyIpAdr
+global at 0x0804ab40 holds the local IP address string for binding. These
+are parsed from the command line by RaspakKeys.
+
+Methods confirmed from nm:
 
 ```
-cusotm::AddEventTiInBuffer(int, unsigned char*, unsigned short*,
-                            TIME_SERVER*)
-  accumulates a teleindication change event into the internal journal buffer
-  parameters:
-    int          device slot index
-    unsigned char*   the raw frame buffer containing the TI change data
-    unsigned short*  pointer to the current frame offset counter (updated
-                     in place as the function consumes bytes from the buffer)
-    TIME_SERVER*     the timestamp to associate with this event, taken from
-                     the GPS time correction path
-  for each active TI point in the bitmask, creates a TAG_TI_EVENT record
-  containing the point index, old value, new value, and timestamp
-  stores the record in the per-device journal ring buffer indexed by device
-  slot, advancing the write pointer and wrapping when the buffer is full
-  the frame offset pointer is updated so the caller knows how many bytes
-  were consumed from the raw frame
-
-cusotm::AddEventTsInBuffer(int, unsigned char, TIME_SERVER*)
-  accumulates a telestatus change event
-  parameters:
-    int          device slot index
-    unsigned char    the new telestatus byte value
-    TIME_SERVER*     timestamp
-  creates a telestatus event record and stores it in the per-device journal
-  ring buffer alongside the TI events
-
-cusotm::AddTiEvent(TAG_TI_EVENT*, unsigned char, unsigned char,
-                   unsigned short, TIME_SERVER*)
-  creates a single TAG_TI_EVENT record from component fields
-  parameters:
-    TAG_TI_EVENT*   output record to populate
-    unsigned char   point type or quality byte
-    unsigned char   value byte (new state of the TI point)
-    unsigned short  point index or address
-    TIME_SERVER*    timestamp for this specific event
-  populates all fields of the TAG_TI_EVENT struct and returns
-
-cusotm::DeleteEventTs(int)
-  removes a telestatus event from the journal for the device at int index
-  called after the event has been successfully acknowledged upstream via
-  RaspakTimeKvitok, freeing the journal slot for new events
-  operates on the telestatus event buffer rather than the TI buffer
-
-cusotm::GetAnalogFromJournal(TAG_TI_EVENT*, unsigned char, MSG_RETURN_ANALOG*)
-  retrieves a historical analog value from the journal
-  parameters:
-    TAG_TI_EVENT*    the event record to retrieve the value from
-    unsigned char    the channel index within the event record
-    MSG_RETURN_ANALOG*   output struct to populate
-  converts the raw value stored in the TAG_TI_EVENT into engineering units
-  and populates MSG_RETURN_ANALOG with the converted value and timestamp
-  called by qmicro when it processes the journal rather than the live state
-
-cusotm::GetDiscretFromJournal(MSG_GET_PARAM*, MSG_RETURN_DISCRET*)
-  retrieves a historical discrete state from the journal
-  parameters:
-    MSG_GET_PARAM*     identifies which device and point to retrieve
-    MSG_RETURN_DISCRET*  output struct to populate
-  searches the telestatus event buffer for events matching the query
-  parameters, returns the most recent matching event
-  if no matching event is found, falls back to the live state from shared
-  memory (same as the base cusotm::GetDiscret behaviour)
-
-cusotm::IsTsWriteEvent(int, unsigned char)
-  checks whether a specific telestatus point is configured to generate
-  journal events
-  parameters:
-    int          device slot index
-    unsigned char    telestatus point index within the device
-  reads the event enable bitmask for the device and checks the bit
-  corresponding to the point index
-  returns non-zero if the point should generate journal entries, zero if
-  it is configured for cyclic polling only
-
-cusotm::MakeZaprosChangeTi(int, int, unsigned char*)
-  builds an outbound change-request frame for teleindication
-  parameters:
-    int          device slot index
-    int          starting sequence number for the change request
-    unsigned char*   output buffer for the built frame
-  constructs a frame requesting all TI changes since the given sequence
-  number, allowing the driver to catch up after a communication interruption
-  the sequence number is stored in the field device and incremented on each
-  acknowledged change event
-
-cusotm::MakeZaprosChangeTs(int, unsigned char*)
-  builds an outbound change-request frame for telestatus
-  parameters:
-    int          device slot index
-    unsigned char*   output buffer for the built frame
-  constructs a frame requesting all TS changes since the last acknowledged
-  event, using a sequence counter maintained per device slot
-
-cusotm::MakeZaprosTimeKvitok(int, unsigned char*)
-  builds a time-tagged acknowledgment frame
-  parameters:
-    int          device slot index
-    unsigned char*   output buffer for the built frame
-  the time-tagged kvitok carries the timestamp of the last received event
-  to allow the field device to synchronize its sequence counter with the
-  RTU's confirmed receive position
-  this is distinct from the basic SendSbrosLatch latch reset: it carries
-  full timestamp information rather than just a reset pulse
-
-cusotm::RaspakChangeTi(int, unsigned char*, unsigned short)
-  parses a teleindication change response frame
-  parameters:
-    int          device slot index
-    unsigned char*   received frame buffer
-    unsigned short   frame length
-  after TestPriem validation, extracts the event bitmask and calls
-  AddEventTiInBuffer for each changed point, associating the current GPS
-  timestamp with all changes in this response
-  after processing all changes, calls MakeZaprosTimeKvitok and sends the
-  time-tagged acknowledgment back to the field device
-  returns non-zero on successful parse, zero on error
-
-cusotm::RaspakChangeTs(int, unsigned char*, unsigned short)
-  parses a telestatus change response frame
-  same structure as RaspakChangeTi but for telestatus points
-  calls AddEventTsInBuffer for each changed telestatus bit
-  sends time-tagged acknowledgment on success
-
-cusotm::RaspakTimeKvitok(int, unsigned char*, unsigned short, TIME_SERVER*)
-  parses the time-tagged acknowledgment from the field device
-  parameters:
-    int          device slot index
-    unsigned char*   received frame buffer
-    unsigned short   frame length
-    TIME_SERVER*     output for the timestamp carried in the kvitok
-  extracts the timestamp from the field device's acknowledgment, allowing
-  the RTU to verify that the field device has received and accepted the
-  last transmitted acknowledgment
-  on success, calls DeleteEventTs to free the acknowledged events from the
-  journal buffer
-
-cusotm::ReadJournalTi(int)
-  reads the teleindication journal for the device at index int
-  called by qmicro's event processing loop rather than by the Working thread
-  retrieves all pending TAG_TI_EVENT records from the per-device ring buffer
-  and passes them to AddTsInJournal via the libjevent event logging path
-  advances the read pointer after delivery
-
-cusotm::ReadJournalTs(int)
-  reads the telestatus journal for the device at index int
-  same pattern as ReadJournalTi but for the telestatus event buffer
+cudpqnx::cudpqnx()                 constructor, two variants
+cudpqnx::~cudpqnx()                destructor, three variants
+cudpqnx::InitKanal()               bind UDP socket and configure address
+cudpqnx::RaspakKeys(int, char**)   parse command line parameters
+cudpqnx::ReadByteFromKanal(unsigned char*)  recvfrom one byte with timeout
+cudpqnx::SendBufToKanal(unsigned char*, unsigned short)  sendto
 ```
 
+The cudp global at 0x0804ab60 is the singleton cudpqnx instance.
 
-## SendZaprosDiscret Signature Difference
+The udpqnx binary does not require initkandrv, confirming UDP has no session
+initialisation handshake. The transport is connectionless: each frame is sent
+as an independent datagram and the RTOS sequence numbers in the SOST_SEND
+struct provide the only session continuity.
 
-Base cusotm signature at 0x0804c4c2:
-  cusotm::SendZaprosDiscret(int)
-  one parameter: the device slot index
-
-usotmj signature at 0x0804d0ba:
-  cusotm::SendZaprosDiscret(int, int)
-  two parameters: device slot index and a mode selector
-
-The second int parameter in the usotmj version controls whether the request
-is for full state synchronisation (mode=0, send a standard discrete poll
-request identical to the base cusotm version) or for incremental change
-reporting (mode=1, send a MakeZaprosChangeTs frame to request only changes
-since the last acknowledged event).
-
-This mode selector allows the Working loop in usotmj to seamlessly switch
-between full-state polling (used after a communication interruption to
-resynchronize) and change-driven polling (used during normal operation to
-minimize bandwidth and achieve sub-second event timestamping).
-
-The two binaries are not drop-in replacements for each other. Any code that
-calls SendZaprosDiscret on a cusotmj object must pass the second parameter.
-The start.ini Uso= line selects which binary is loaded, and qmicro's internal
-method dispatch is configured at load time based on TypeUsoJournal.
+The GetDinamicTimeSend and GetLenPachka methods are imported from kanaldrv,
+confirming that the UDP transport uses dynamic timing (adjusting its transmit
+interval based on channel load) and supports the pachka (packet batch)
+framing used by the retranslation layer.
 
 
-## __SS__ Session State Global
+## cudpretr UDP Retranslation Channel (progr/udpretransl)
 
-The __SS__ global at address 0x0804fea8 (confirmed from nm, type D,
-initialised data, symbol name with double underscore prefix indicating it
-is a compiler or linker-generated state variable) is unique to usotmj and
-absent from usotm.
+Class name: cudpretr. Source file: udpretransl.cc.
 
-In the usotmj context, __SS__ tracks the session-level acknowledgment state
-across multiple change-driven poll cycles. Its value determines whether the
-next Working loop iteration should send a new change request or wait for the
-field device to acknowledge the previous one. The double-underscore prefix
-is unusual for application-level globals and may indicate this is a
-compiler-generated static initializer guard variable related to the journal
-state machine initialization.
+The binary links against libretransldrv.so.1 (not libkanaldrv.so.1),
+confirming this transport operates in the retranslation layer rather than
+the primary channel layer. It uses the retransldrv base class vtable rather
+than the kanaldrv vtable.
 
+The My_Port global at 0x0804a890 and MyIpAdr global at 0x0804a9c0 provide
+the local binding parameters. The retranslation transport listens for
+retranslated srez frames from downstream retranslators and forwards them
+upstream to the SCADA master.
 
-## Additional Imports Unique to usotmj
-
-Confirmed from the undefined symbol table in the usotmj nm output:
+Methods confirmed from nm:
 
 ```
-usodrv::WaitKanalFree(int, int)
-  present in usotmj, absent from usotm
-  coordinates serial port access across multiple concurrent polling threads
-  the base cusotm uses a simpler single-threaded model without port locking
-  usotmj needs port locking because the journal write thread and the poll
-  thread may both need serial port access simultaneously
-
-usodrv::FreePort(int, int, int)
-  present in usotmj, absent from usotm
-  releases the serial port lock after a port access sequence completes
-
-usodrv::GetParValue(unsigned short, unsigned short, DEF_PAR_VALUE*)
-  present in usotmj, absent from usotm
-  reads device configuration parameter values from the parameter table
-  used by the journal extension to read event enable bitmasks and
-  sequence counter initial values from the device configuration
-
-tcdrain (C library function)
-  present in usotmj (confirmed from the C library imports), absent from usotm
-  ensures all queued output bytes have been physically transmitted before
-  the driver waits for a response
-  the journal variant needs this because the time-tagged acknowledgment
-  frames must be fully transmitted before the driver can issue the next
-  change request, to avoid sequence number ambiguity
+cudpretr::cudpretr()               constructor, two variants
+cudpretr::~cudpretr()              destructor, three variants
+cudpretr::CloseSocket()            close the UDP socket
+cudpretr::InitKanal()              bind and configure the UDP socket
+cudpretr::OpenSocket()             create and bind the retranslation socket
+cudpretr::RaspakKeys(int, char**)  parse command line parameters
+cudpretr::ReadByteFromKanal(unsigned char*)   recvfrom with timeout
+cudpretr::SendBufToKanal(unsigned char*, unsigned short)  sendto
 ```
 
+The cudp global at 0x0804a9e0 is the singleton cudpretr instance.
 
-## Working Loop Changes
+The project/start.ini configuration activates udpretransl on port 2127:
+_Retransl=udpretransl p2127
 
-The Working() method in usotmj follows the same 11-step structure as the
-base cusotm Working() method (documented in docs/protocol.md) but with two
-modifications:
 
-Step 11 (discrete poll) calls SendZaprosDiscret(i, mode) with the additional
-mode parameter instead of the base SendZaprosDiscret(i). The mode is
-determined by the current acknowledgment state tracked in the per-device
-journal state.
+## csercom Serial Channel (progr/sercom)
 
-After RaspakDiscret succeeds, instead of (or in addition to) the standard
-SendSbrosLatch call, usotmj calls RaspakChangeTi or RaspakChangeTs depending
-on whether the response contained change events or a full-state snapshot.
-If the response was change-driven, the time-tagged acknowledgment path is
-followed. If it was a full-state poll, the standard latch reset path is used.
+Class name: csercom. Source file: sercom.cc.
 
-The Working loop in usotmj also calls ReadJournalTi and ReadJournalTs
-periodically to deliver accumulated journal events to qmicro's event
-processing path, ensuring the journal does not overflow during periods of
-high change activity.
+The binary links against libkanaldrv.so.1. It uses direct serial port file
+descriptor operations: open, read, write with termios configuration.
+
+The sercom global at 0x0804a6a0 is the singleton csercom instance.
+
+Methods confirmed from nm:
+
+```
+csercom::csercom()                 constructor, two variants
+csercom::~csercom()                destructor, three variants
+csercom::ClearKanal()              clear the serial port state
+csercom::GetDinamicTimeSend(unsigned short)   dynamic transmit timing
+csercom::GetStaticTimeSend()       static transmit timing (returns 0.0)
+csercom::InitKanal()               open and configure the serial port
+csercom::RaspakKeys(int, char**)   parse command line parameters
+csercom::ReadByteFromKanal(unsigned char*)    read one byte with timeout
+csercom::SendBufToKanal(unsigned char*, unsigned short)  write frame
+csercom::TimeReInitKanal()         close and reopen the serial port
+```
+
+csercom does not require initkandrv or libsocket.so.2, confirming it is a
+pure serial transport with no TCP/IP component.
+
+The GetDinamicTimeSend method is present in csercom but returns a computed
+value based on the baud rate and current channel load, allowing the RTOS
+layer to adapt its transmit scheduling to the physical serial link speed.
+
+csercom is the parent class of cgsmlink. The GSM modem transport uses all
+of csercom's serial handling and adds the AT command layer on top.
+
+
+## cgsmlink GSM Modem Channel (progr/gsmlink)
+
+Class name: cgsmlink. Source file: gsmlink.cc.
+
+The binary links against libkanaldrv.so.1. It contains both cgsmlink methods
+and csercom methods, confirming csercom is statically inherited or the binary
+includes both class implementations.
+
+The gsmlink global at 0x0804ac40 is the singleton cgsmlink instance.
+
+The AT command string "AT+CFUN=1" confirmed from strings, used by modem_on()
+to power on the GSM modem radio.
+
+Methods confirmed from nm:
+
+```
+cgsmlink::cgsmlink()               constructor, two variants
+cgsmlink::~cgsmlink()              destructor, three variants
+cgsmlink::InitKanal()              configure modem and open data connection
+cgsmlink::modem_off()              send power-down AT commands to modem
+cgsmlink::modem_on()               send AT+CFUN=1 and establish GPRS link
+cgsmlink::RaspakKeys(int, char**)  parse command line parameters
+cgsmlink::TimeReInitKanal()        disconnect and reconnect GPRS session
+csercom::ClearKanal()              clear serial port state
+csercom::GetDinamicTimeSend(unsigned short)
+csercom::GetStaticTimeSend()
+csercom::InitKanal()               serial port open and configure
+csercom::RaspakKeys(int, char**)
+csercom::ReadByteFromKanal(unsigned char*)
+csercom::SendBufToKanal(unsigned char*, unsigned short)
+csercom::TimeReInitKanal()
+```
+
+The two-level class structure allows TimeReInitKanal in cgsmlink to first
+disconnect the GPRS data session (modem-level), then call csercom::TimeReInitKanal
+to reset the serial port (hardware level). This two-phase reconnect handles
+both modem state and serial state in the correct order.
+
+
+## ctnc TNC Packet Radio Channel (progr/tnc)
+
+Class name: ctnc. Source file: tnc.cc.
+
+The binary links against libkanaldrv.so.1. It requires devctl for hardware
+control of the serial port beyond what termios provides (likely for RTS/CTS
+and DSR/DTR hardware handshake control used by the TNC).
+
+The tnc global at 0x0804c1c0 is the singleton ctnc instance. The S global
+at 0x0804be34 holds the TNC configuration string.
+
+Methods confirmed from nm:
+
+```
+ctnc::ctnc()                constructor, two variants
+ctnc::~ctnc()               destructor, three variants
+ctnc::AnalizAnswer(unsigned char*, int)
+  analyzes a received TNC command response
+  the int parameter is the expected response type code
+ctnc::CheckCTS(int)
+  reads the CTS (clear to send) hardware signal
+  the int parameter is the timeout in milliseconds
+ctnc::CheckDSR(int)
+  reads the DSR (data set ready) hardware signal
+  used to verify the TNC is powered and connected
+ctnc::ClearKanal()
+  resets the AX.25 channel state to idle
+ctnc::GetDinamicTimeSend(unsigned short)
+  returns dynamic transmit timing based on channel occupancy
+ctnc::GetLenPachka(unsigned short)
+  returns the maximum frame length for the current channel state
+ctnc::GetStaticTimeSend()
+  returns fixed transmit timing (returns 0.0 via fldz)
+ctnc::InitRadioKanal()
+  sends TNC2 init sequence: JHOST1, P255, QRES
+  JHOST1 enables host mode on the TNC2 (binary packet mode)
+  P255 sets maximum packet length to 255 bytes
+  QRES resets the TNC2 station state
+ctnc::InitTnc()
+  full TNC initialization: configures callsign, timers, and operating mode
+ctnc::OprosAllChannels()
+  polls all active AX.25 virtual circuits for received data
+ctnc::RaspakKeys(int, char**)
+  parses command line: computer port, radio port, baud rates, callsign
+ctnc::RaspakSaveSost(char*)
+  parses saved channel state from the state file
+ctnc::ReadByteFromKanal(unsigned char*)
+  reads one byte from the received AX.25 frame buffer
+ctnc::ReadDataFromChannel(unsigned char)
+  reads a complete data frame from the specified AX.25 channel
+ctnc::ReadInfoPachka(unsigned char)
+  reads the information field of an AX.25 I-frame
+ctnc::ReadMessage(unsigned char)
+  reads and dispatches a TNC message by type
+ctnc::ReadSaveSost()
+  reads the saved channel state from the state file at startup
+ctnc::ReadSaveSostKanal(unsigned char)
+  reads the saved state for a specific AX.25 channel index
+ctnc::ReadSostKanal(unsigned char)
+  reads the current operating state of an AX.25 channel
+ctnc::SendBufToKanal(unsigned char*, unsigned short)
+  transmits a frame via the AX.25 radio channel
+ctnc::SendCommandHost(unsigned char, unsigned char, unsigned char*,
+                      unsigned long, unsigned char*, unsigned long,
+                      unsigned long*, unsigned long)
+  sends a TNC2 host-mode command frame to the TNC
+  parameters: channel, command_type, data1, len1, data2, len2,
+              result_ptr, timeout
+ctnc::SendCommandTerminal(char*, char*, unsigned long, unsigned long*,
+                           unsigned long)
+  sends an AT-style ASCII command to the TNC
+  parameters: command_string, response_string, response_maxlen,
+              received_len_ptr, timeout
+```
+
+The TNC2 command strings confirmed from the strings section:
+
+  JHOST1 enables host mode (binary framing instead of ASCII terminal mode)
+  P255 sets the maximum packet length parameter to 255 bytes
+  QRES sends a quit/reset command to clear pending sessions
+  "%ld %ld %ld %ld %ld %ld %ld" is the 7-field status format for logging
+    channel statistics: send count, receive count, error count, retry count,
+    connect count, disconnect count, and currently connected flag
+  "I%ld" is the information frame count format
+  "S%ld" is the supervisory frame count format
+  "@T2%ld" is a timer 2 status format (T2 is the AX.25 inter-frame gap timer)
+
+The two serial ports used by ctnc (computer port and radio port) have
+independent baud rates, interrupt assignments, and timing parameters.
+The computer port connects to the host (this QNX system) and the radio port
+connects to the physical TNC hardware.
+
+The modem.cfg file (documented in docs/architecture.md) configures the radio
+port as /dev/ser4 at 19200 baud and the computer port as com2 (likely
+/dev/ser2) at 38400 baud.
+
+
+## crs485retr RS-485 Retranslation Channel
+
+### Driver mode variant (progr/rs485retransl)
+
+Class name: crs485retr. Source file: rs485retransl.cc.
+Links against libretransldrv.so.1.
+
+### DOS compatibility variant (progr/rs485dosretransl)
+
+Class name: crs485retr. Source file: rs485dosretransl.cc.
+Links against libretransldos.so.1.
+
+Both variants implement the same crs485retr class and differ only in the
+retranslation library they link against. The NIAM build marker suffix for
+both is @ (0x40), confirming they share the same unit-type discriminator.
+
+Methods confirmed from nm (identical in both variants):
+
+```
+crs485retr::crs485retr()           constructor, two variants
+crs485retr::~crs485retr()          destructor, three variants
+crs485retr::InitKanal()            open and configure the RS-485 port
+crs485retr::RaspakKeys(int, char**)  parse command line parameters
+crs485retr::ReadByteFromKanal(unsigned char*)   read one byte
+crs485retr::SendBufToKanal(unsigned char*, unsigned short)  write frame
+```
+
+The crs485 global holds the singleton instance. The default port is /dev/ser1.
+The RS-485 retranslation path aggregates srez data from downstream RTU
+devices and forwards it upstream via the retransldrv base class.
+
+The PrepareBufRetr method is imported from retransldrv (not kanaldrv),
+confirming the retranslation layer has a distinct buffer preparation path
+from the primary channel layer.
+
+libretransldos.so.1 provides DOS-mode compatibility for older RTU devices
+that expect a DOS-style communication handshake. libretransldrv.so.1 provides
+the driver-mode implementation for QNX-native communication.
+
+
+## cp104send IEC 60870-5-104 Server (progr/p104send)
+
+Class name: cp104send. Source file: p104send.cc.
+
+The cp104send class subclasses kanaldrv and implements a complete IEC
+60870-5-104 TCP server. Full documentation is in docs/protocol.md.
+
+The binary links against libkanaldrv.so.1 and libsocket.so.2. It does not
+link against libusodrv.so.1, confirming it operates on the channel side of
+the firmware rather than the field bus side.
+
+The TimeCorrectGo(SOST_TIME_CORRECT*, unsigned short, long) function is a
+standalone exported function at 0x08049e59, not a class method. It applies
+GPS-derived time correction to the IEC 104 time base, converting between the
+RTOS internal SOST_TIME_CORRECT representation and the CP56Time2a 56-bit
+timestamp format required by IEC 104.
+
+The WorkProc function at 0x080497a6 is the thread entry point for the IEC 104
+server. It is a free function (not a class method) spawned by StartDrv().
+
+The ctcp global at 0x0804fa00 is the singleton cp104send instance.
