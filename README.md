@@ -9,7 +9,9 @@ Read the LICENSE before examining any files.
 
 This project focuses on architectural analysis of the RTU firmware, 
 mapping the software stack, protocol family, hardware platform, and binary inventory. 
-Some protocol internals are documented in detail where they were needed to understand the architecture, but deep protocol RE is not the goal here. For a complete reverse engineering of the main protocol(s), see my other repository which i fully RE'd the main protocols. 
+Some protocol internals are documented in detail where they were needed to understand the architecture, but deep protocol RE is not the goal here. For a complete reverse engineering of the main protocol(s), see [ASTUE-Custom_RU-protocols](https://github.com/Klaurx/ASTUE-Custom_RU-protocols) 
+
+Also, please do *NOT* expect this to be begginer-friendly or "clear", RE of this firmware was extremely difficult and hard, so i would apriticate underestanding.
 
 
 ## What This Is
