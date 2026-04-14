@@ -1,4 +1,4 @@
-# Russian SCADA ASTUE RTU Custom Protocol Dump
+# Russian SCADA ASTUE RTU Custom Protocol architecture analysis
 
 Reverse engineering of a proprietary Russian industrial telemetry protocol
 stack recovered from a QNX Neutrino based SCADA remote terminal unit.
