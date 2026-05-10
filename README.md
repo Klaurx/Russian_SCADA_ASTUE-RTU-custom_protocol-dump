@@ -1,4 +1,4 @@
-# Russian SCADA ASTUE RTU Custom Protocol architecture analysis
+# post-soviet-ICS-magic
 
 ### DISCLAIMER;
 This information has never been public before, so i expect everyone to know their limits, and that this is not for explotation. 
@@ -15,7 +15,7 @@ Read the LICENSE before examining any files.
 
 This project focuses on architectural analysis of the RTU firmware, 
 mapping the software stack, protocol family, hardware platform, and binary inventory. 
-Some protocol internals are documented in detail where they were needed to understand the architecture, but deep protocol RE is not the goal here. For a complete reverse engineering of the main protocol(s), see [ASTUE-Custom_RU-protocols](https://github.com/Klaurx/ASTUE-Custom_RU-protocols) 
+Some protocol internals are documented in detail where they were needed to understand the architecture, but deep protocol RE is not the goal here. For a complete reverse engineering of the main protocol(s), see [ASTUE](https://github.com/Klaurx/ASTUE) 
 
 Also, please do *NOT* expect this to be begginer-friendly or "clear", RE of this firmware was extremely difficult and hard, so i would apriticate underestanding.
 
