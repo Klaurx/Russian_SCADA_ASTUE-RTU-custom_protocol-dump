@@ -1,4 +1,4 @@
-# post-soviet-ICS-magic
+# post soviet ICS magic
 
 ### DISCLAIMER;
 This information has never been public before, so i expect everyone to know their limits, and that this is not for explotation. 
