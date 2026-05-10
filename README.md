@@ -1,5 +1,8 @@
 # Russian SCADA ASTUE RTU Custom Protocol architecture analysis
 
+### DISCLAIMER;
+This information has never been public before, so i expect everyone to know their limits, and that this is not for explotation. 
+
 **This Repo is about a Deployed Russian RTU being Reversed. If you are planning to use this for education, i highly reccomend you do not. It is for research.**
 Also, i used AI to **summarize** everything due to the fact it was overwhelmingly large and complex + filled with legacy code. 
 
