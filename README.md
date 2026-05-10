@@ -1,5 +1,8 @@
 # Russian SCADA ASTUE RTU Custom Protocol architecture analysis
 
+**This Repo is about a Deployed Russian RTU being Reversed. If you are planning to use this for education, i highly reccomend you do not. It is for research.**
+Also, i used AI to **summarize** everything due to the fact it was overwhelmingly large and complex + filled with legacy code. 
+
 Reverse engineering of a proprietary Russian industrial telemetry protocol
 stack recovered from a QNX Neutrino based SCADA remote terminal unit.
 All IP addresses and operationally sensitive identifiers have been fully redacted before
